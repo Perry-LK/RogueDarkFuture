@@ -1,5 +1,69 @@
 # FutureDark: Game Design Document
 
+## Expanded prototype / accepted direction
+
+The current build supersedes the original short-slice scope:
+
+- **Board-first UI:** compact phase/HP/funds bar, small enemy-intent badges, one hover/selection inspector, straight card row. Dossier cards use olive (troop), rust (action), steel blue (block), and faded purple (board), with separate category symbols. Card dealing, hover lift, play/discard travel and piece movement animate; reduced motion removes movement.
+- **Two acts plus central command:** Outer Blocks and Glass Ward each generate a seeded nine-room branching route on entry. Icons open encounter dialogs. Paths commit forward; branches are left behind. Events, fights and red zones vary by seed; a vendor and act boss are guaranteed.
+- **Between-act city overview:** jagged district borders, rough streets, rundown outer architecture and denser high-rises. Completed districts fill with faded amber. The centre unlocks after `ceil(main act count * 2 / 3)` completions, requiring both current acts.
+- **Enemy squads, not enemy decks:** movement and fixed routines are authored per type. Plans lock at round start. Occupied/denied destinations cause a hold, not surprise retargeting. Actual troop attacks are restricted to the overlap of the committed area and the pattern from the actual final position; organisation damage is never removed by a blocked move.
+- **Enemy synergies:** marked troops enable a surviving, unjammed spotter's sniper bonus; adjacent shield units provide breakable formation armour; commanders empower nearby allies; controllers lay hazards that riot units push troops into; relay carriers summon drones into committed landing tiles. Summons wait until the next round and squads cap at six. Jam disables movement, action and support for the entire enemy phase.
+- **Action-heavy builds:** forty distinct cards and six troop types support precision, corrosion/detonation, displacement/traps, formations and supply manipulation. A small troop core can support an action-led deck. No special starter-deck selection was added.
+- **Economy:** one wallet across the run, reset on new runs. Initial HP is 64 and funds 65. Vendors sell cards, supplies and relics, buy back only supplies at half price, and offer paid card removal (45 funds initially, +15 per use, minimum eight cards).
+- **Supplies:** three slots, one item each. One free use per round in card play. Cards and relics can increase uses or improve effects. Recovery and AP/draw engines exhaust where necessary to avoid self-sustaining loops.
+- **Relics:** twelve passive upgrades, active for the entire run, reset on a new run. Elite/boss victories grant an unowned relic when one remains; vendors and black-market events can also grant them.
+- **Manual saves:** one slot per unique run, unlimited distinct runs. Saving during a room stores its entrance snapshot; reloading restores all resources and deterministic content together. Saving at a route/city boundary stores that boundary. No autosave. Defeat deletes that run's saved slot.
+
+Normal victories recover three HP and grant twenty funds; elites grant forty-two funds; bosses recover eighteen HP and grant sixty-five funds, before relic modifiers. Healing caps at maximum. Events offer explicit costs and resolve once. Rewards may be skipped.
+
+### Additional combo contracts
+
+- **Breach:** a direct hit consumes one mark for +3 damage (+5 with Targeting Prism). Troop previews include the mark bonus exactly once.
+- **Meltdown:** Detonate consumes all corrosion and adds twice its stack count. Corrosion otherwise ticks before enemy movement, ignores guard, and decays by one.
+- **Dead End:** entering a friendly trap or mine triggers and consumes it once; displacement can force this. Traps root for the pending enemy phase.
+- **Fire Support:** Breach Charge adds five damage when a friendly troop is within two Manhattan cells.
+- **United Front / Hold Fast:** Rally grants bonuses to currently adjacent allies; Entrenched Fire requires no movement that round.
+- **Hotwired:** an amplified damaging supply produces combo feedback on actual HP loss. Non-damaging supply setup remains quiet.
+
+All successful enemy combinations also produce feedback. Normal hits, empty setup, fully absorbed hits and failed moves remain visually restrained. Difficulty needs continued human playtesting; automated tactical policies are regression checks, not a promise of a target human win rate.
+
+## Initial prototype decisions (historical)
+
+The repository now contains the **short playable resistance run**, rather than only the M1 board sandbox. This scope and the following defaults were accepted for the first implementation; they supersede conflicting "Open" or "Proposed" labels below for this prototype only.
+
+- Godot 4.7.2 .NET, C#, desktop. Layered vector silhouettes on a dimetric 2D grid implement the 2.5D presentation without 3D models.
+- Brutalist tactical-terminal aesthetic: charcoal, concrete, worn ivory. Electric cyan and hot amber are reserved for successful combo feedback; ordinary turns remain desaturated. A muted red incoming-threat warning is the accessibility exception.
+- Controlled combo trails, brief impact rings, a small board-only impulse and synthesized audio. Reduced motion replaces motion effects with a static target outline; audio and threat haze have separate controls.
+- Three AP; five draw attempts from an initially empty hand; nine-card cap; one basic move per troop; all covered enemies hit in deployment order. Close card play before movement. Choose `min(2, hand size)` discards after automatic attacks, before enemy actions. The attack control explicitly holds every unused move.
+- Terrain and temporary denied tiles affect destinations only, never attacks, organisation damage, or vision. Breachers can jump intermediate cells; all movement rejects occupied, missing or denied destinations.
+- Organisation and troop block are consumed independently and expire after enemy actions. Enemy guard stacks and remains until consumed. Enemies resolve in spawn order; organisation defeat stops resolution immediately.
+- Manhattan-distance-two proximity reveals the next intent. Recon reveals all enemies for the current round (two rounds when upgraded). Unobserved intent never exposes exact damage or target tiles. The warning uses raw incoming organisation attack damage at or above 25% of current HP, independent of block.
+- Starting organisation HP: 56. The relay offers either 14 healing (capped at maximum) or one permanent card upgrade. Normal fights offer one of three random cards or a skip. Boss victory applies eight recovery once and ends the prototype.
+- No mid-run save or permanent unlocks; accessibility settings alone persist.
+
+### Combo contract
+
+1. **Ghost Signal:** A Marksman attacking while Recon Sweep's intel effect is active gains +3 damage. Proximity intel alone does not enable this.
+2. **Momentum:** A Runner affected by Forced March gains +3 damage after making at least two actual moves this round. Holding is not movement.
+3. **Kill Circuit:** A troop with Coordinated Strike attacking an enemy on Exposed Ground gains +3 additional damage, on top of Strike (+2) and exposure (+2).
+
+Different combos stack. Multiple copies of Recon refresh duration, rather than multiplying Ghost Signal. Strike bonuses stack, but Kill Circuit adds its +3 once per hit; exposure on a tile is replaced rather than multiplied. Combo audiovisual events require **positive enemy HP loss** after guard. An armed combo or fully guarded hit produces no spectacle.
+
+### Authored starting content
+
+The sixteen-card starting deck contains two Runners, two Marksmen, one Breacher, three Emergency Networks, one Field Armour, one Intercept Package, two Recon Sweeps, one Forced March, one Coordinated Strike, one Barricade and one Exposed Ground.
+
+| Piece | Cost | HP / attack | Move | Attack |
+|---|---|---|---|---|
+| Runner | 1 | 11 / 3 | One orthogonal cell | Orthogonal neighbours |
+| Marksman | 2 | 8 / 4 | One orthogonal cell | Up to four cells toward row 1 in its column |
+| Breacher | 2 | 14 / 4 | Knight leap | All eight adjacent cells |
+
+Recon costs zero; other non-troop cards cost one. Network and Armour grant seven block to their respective recipients; Intercept grants four to each. Barricade and Exposed Ground last two enemy phases. Upgraded troops gain two HP and one attack; block cards gain three block; Recon/Barricade gain one phase of duration; March gains another move; Strike/Exposed gain one damage.
+
+Route: **Checkpoint 09** -> **Dead Frequency** (event) or **The Foundry** (fight) -> **Underpass** -> **The Warden**. See the [README](../README.md) for controls and validation commands. The remainder of this document retains the wider design and deferred decisions.
+
 ## 1. Vision
 
 **Confirmed:** A dark-future dystopian tactical deckbuilding roguelike. The player controls one faction leader per run, travelling through a district represented by branching encounter maps. Battles combine card play, chess-inspired troop movement, automatic patterned attacks, and persistent organisation health.

@@ -1,6 +1,25 @@
 # FutureDark: Godot/C# Implementation Outline
 
-This is a development plan, not an implemented architecture. Rules and decision status are defined in the [game design document](GAME_DESIGN.md).
+This document retains the development plan and verification contracts. A playable short-run implementation now exists. The accepted prototype decisions at the top of the [game design document](GAME_DESIGN.md) take precedence over the original open decisions below.
+
+## Current implementation
+
+The expansion now includes two generated acts and a central finale, forty cards, tactical enemy squads, vendors, supplies, relics and manual room-entry saves. The **Expanded prototype** section of the [design document](GAME_DESIGN.md) overrides older milestone assumptions.
+
+- [project.godot](../project.godot) pins the Godot 4.7 .NET project; [FutureDark.csproj](../FutureDark.csproj) pins `Godot.NET.Sdk/4.7.2` and targets .NET 8. [global.json](../global.json) selects .NET SDK 10.0.300 with patch roll-forward.
+- [Definitions.cs](../Scripts/Rules/Definitions.cs) contains typed immutable C# records and the small authored content catalogue.
+- [Combat.cs](../Scripts/Rules/Combat.cs) owns seeded shuffles, card zones, phases, queries, recipients, intents, temporary effects and combo events.
+- [CombatActions.cs](../Scripts/Rules/CombatActions.cs) resolves typed actions, supplies, status damage and terrain triggers. [EnemyTactics.cs](../Scripts/Rules/EnemyTactics.cs) creates committed plans, forecasts squad bonuses and resolves stable movement/action order.
+- [RunState.cs](../Scripts/Rules/RunState.cs) owns the route, deck, organisation HP handoff, events, rewards and terminal transitions. During combat, `RunState.Hp` reads the battle's authoritative HP, not a second UI copy.
+- [ExpansionContent.cs](../Scripts/Rules/ExpansionContent.cs) authors the expanded card pool, specialist squads, relics and supplies.
+- [RunSaveStore.cs](../Scripts/Rules/RunSaveStore.cs) stores validated, versioned snapshots using a unique run ID as the filename. Writes go through a flushed temporary file and replacement; loading reconstructs the seed-generated route and optionally re-enters the saved room. Mid-room effects never enter the saved entrance snapshot.
+- [Main.tscn](../Scenes/Main.tscn) hosts [GameView.cs](../Scripts/Presentation/GameView.cs), a scalable Godot Control with shared draw/input coordinates, depth-sorted vector pieces, explicit command feedback, keyboard focus, modals and combo-only audio/animation. Logical resolution commits once before presentation; inputs lock briefly during resolution.
+- The view's [campaign partial](../Scripts/Presentation/GameView.Campaign.cs) handles city/route/event/vendor/save interfaces; its [tactical partial](../Scripts/Presentation/GameView.Tactical.cs) handles inspection, category art, input-driven card travel, movement interpolation and turn announcements. Save failures and unreadable slots are surfaced in the UI and Godot diagnostics.
+- [Tests](../Tests) contains a dependency-free console rule runner and deterministic tactical policy. Native smoke scenarios inject real Godot mouse/key events and optionally save viewport captures.
+
+**Deliberate simplifications:** Authored definitions use immutable typed C# records rather than Godot Resource assets so the compact catalogue and simulation can be tested without the engine. All screen presentations share a single native Control instead of separate scene hierarchies. Neither choice adds a generic effect engine or external UI framework; content can migrate to Resources if editor-based authoring becomes necessary.
+
+**Validation:** The package-free runner covers 29 behavioral groups, including both acts and the finale, normal/upgraded resolution for all cards, squad-combo disruption, deterministic map edges, single-use transactions, inventory limits and file-backed room rollback. Native scenarios cover city/act maps, combat, enemy response, card animation, vendor/events, inventory, keyboard-only deployment, maximum hand and reduced motion. These checks do not replace human balance or accessibility playtesting. Instructions are in the [README](../README.md#validate).
 
 ## 1. Technical direction
 
@@ -235,7 +254,7 @@ Only after the core loop works: security leader, expanded card pools, additional
 
 ## 8. Verification matrix
 
-No game tests exist yet. Use this matrix to drive rule tests and focused in-engine checks when implementation begins. Introduce lightweight C# test tooling only when needed; no tooling installation is required for these documents.
+The package-free C# test runner now exercises these contracts. Continue using this matrix for regression tests and focused in-engine checks as content changes.
 
 | Area | Required check |
 |---|---|
@@ -280,4 +299,4 @@ Use deterministic seeds and compact state snapshots for failures. Run the smalle
 
 ## 10. First implementation task
 
-After approving M0 defaults, create the Godot .NET project and implement M1 only: one irregular board, a marked deployment zone, two placeholder troop types, movement/hold, and attack previews. Do not start with the full map, both leaders, a general-purpose card engine, or the six-act campaign.
+The original next step was an M1-only board sandbox. The accepted implementation request superseded that limit with one complete short resistance run (M1-M4 and an initial M5 presentation pass). Do not expand this prototype into both leaders or the six-act campaign without a new scope decision. The next useful work is human playtesting of combo clarity, hand retention, block tradeoffs and difficulty.
