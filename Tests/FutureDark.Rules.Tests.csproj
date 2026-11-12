@@ -8,5 +8,6 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="..\Scripts\Rules\*.cs" Link="Rules\%(Filename)%(Extension)" />
+    <Compile Include="..\Scripts\Presentation\RouteLayout.cs" Link="Presentation\RouteLayout.cs" />
   </ItemGroup>
 </Project>

@@ -14,7 +14,7 @@ public sealed partial class Combat
             EnemyMove.Diagonal => dx == 1 && dy == 1,
             _ => false
         };
-        return valid && CanEnter(cell);
+        return valid && CanEnter(cell) && Board.CanTraverse(enemy.Cell, cell, enemy.Definition.Movement == EnemyMove.Knight);
     }).ToHashSet();
 
     private void PlanEnemies()
@@ -23,7 +23,7 @@ public sealed partial class Combat
         foreach (var enemy in _enemies)
         {
             Cell target = _troops.OrderBy(t => t.Cell.Distance(enemy.Cell)).ThenBy(t => t.Card.Id).FirstOrDefault()?.Cell
-                ?? new Cell(Math.Clamp(enemy.Cell.X, 1, 5), 4);
+                ?? new Cell(Math.Clamp(enemy.Cell.X, 1, Board.Width - 2), Board.Height - 2);
             float Score(Cell cell)
             {
                 float score = -cell.Distance(target);
@@ -32,6 +32,7 @@ public sealed partial class Combat
                 else if (enemy.Definition.Role is EnemyRole.Shield or EnemyRole.Commander)
                     score += _enemies.Count(e => e != enemy && e.Cell.Distance(cell) <= 1) * 1.4f;
                 score += _troops.Count(t => PatternCells(enemy.Step.Pattern, cell).Contains(t.Cell)) * 3;
+                if (Board.Hazards.ContainsKey(cell)) score -= 6;
                 if (cell == enemy.Cell) score += .1f;
                 return score;
             }
@@ -82,6 +83,7 @@ public sealed partial class Combat
     private void ResolveEnemies()
     {
         _impacts.Clear();
+        TickEnvironment();
         foreach (var enemy in _enemies.Where(e => e.Corrosion > 0).ToArray())
         {
             int corrosion = enemy.Corrosion;
@@ -137,7 +139,7 @@ public sealed partial class Combat
                     AddLog($"{enemy.Definition.Name} arms nearby allies' coordinated attacks.");
                     break;
                 case EnemyActionKind.Summon:
-                    if (_enemies.Count < 6 && CanEnter(enemy.Plan.target))
+                    if (_enemies.Count < Board.EnemyCapacity && CanEnter(enemy.Plan.target))
                     {
                         int id = _enemies.Max(e => e.Id) + 1;
                         var spawned = new Enemy(id, new Spawn(Content.Drone, enemy.Plan.target));
@@ -193,11 +195,13 @@ public sealed partial class Combat
             (combos.Length > 0 ? " / " + string.Join(" + ", combos) : "") + ".");
         if (OrganisationHp == 0) { Phase = Phase.Defeat; AddLog("Signal lost. This run is over."); return; }
         var covered = EnemyAttackCells(enemy);
+        foreach (var cover in Board.Cover.Keys.Where(covered.Contains).ToArray())
+            HitCover(cover, power + HeightBonus(enemy.Cell, cover, enemy.Step.Pattern != AttackPattern.Adjacent));
         foreach (var troop in _troops.Where(t => covered.Contains(t.Cell)).ToArray())
         {
-            HitTroop(troop, power, enemy.Cell, links.ToArray());
+            HitTroop(troop, power + HeightBonus(enemy.Cell, troop.Cell, enemy.Step.Pattern != AttackPattern.Adjacent), enemy.Cell, links.ToArray());
             if (enemy.Step.Kind == EnemyActionKind.Push && _troops.Contains(troop) &&
-                troop.Cell == enemy.Plan.target && CanEnter(enemy.Plan.pushTo))
+                troop.Cell == enemy.Plan.target && CanEnter(enemy.Plan.pushTo) && Board.CanTraverse(troop.Cell, enemy.Plan.pushTo))
             {
                 troop.Cell = enemy.Plan.pushTo;
                 TriggerFriendlyTile(troop);

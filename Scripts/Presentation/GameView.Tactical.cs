@@ -32,41 +32,26 @@ public partial class GameView
     };
 
     private void DrawCategoryIcon(CardKind kind, Vector2 p, float size, GColour color)
-    {
-        switch (kind)
-        {
-            case CardKind.Troop:
-                DrawCircle(p + new Vector2(0, -size * .45f), size * .28f, color);
-                DrawPolygon([p + new Vector2(-size * .7f, size * .7f), p + new Vector2(-size * .35f, -size * .08f),
-                    p + new Vector2(size * .35f, -size * .08f), p + new Vector2(size * .7f, size * .7f)], [color]);
-                break;
-            case CardKind.Action:
-                DrawPolygon([p + new Vector2(size * .3f, -size), p + new Vector2(-size * .7f, size * .2f),
-                    p + new Vector2(0, size * .2f), p + new Vector2(-size * .3f, size),
-                    p + new Vector2(size * .7f, -size * .2f), p + new Vector2(0, -size * .2f)], [color]);
-                break;
-            case CardKind.Block:
-                Outline([p + new Vector2(-size * .7f, -size * .8f), p + new Vector2(size * .7f, -size * .8f),
-                    p + new Vector2(size * .6f, size * .2f), p + new Vector2(0, size),
-                    p + new Vector2(-size * .6f, size * .2f)], color, 2);
-                break;
-            case CardKind.Board:
-                for (int i = 0; i < 4; i++)
-                    DrawRect(new Rect2(p + new Vector2((i % 2) * size - size, (i / 2) * size - size),
-                        new Vector2(size * .8f, size * .8f)), color, false, 1.5f);
-                break;
-        }
-    }
+        => DrawEmblem(CategoryEmblem(kind), new Rect2(p - Vector2.One * size, Vector2.One * size * 2), color);
 
     private void DrawCardStencil(Card card, Vector2 centre, float size, GColour color)
     {
-        DrawCategoryIcon(card.Definition.Kind, centre, size, color);
-        DrawArc(centre, size * 1.4f, -.6f, 2.3f, 20, color, 1, true);
-        DrawLine(centre + new Vector2(-size * 1.9f, size * 1.4f), centre + new Vector2(size * 1.7f, size * 1.4f), color, 1);
-        if (card.Definition.Piece == PieceKind.Marksman)
-            DrawLine(centre + new Vector2(-size * .8f, size * .5f), centre + new Vector2(size, -size), color, 3, true);
-        if (card.Definition.Effect is EffectKind.Corrode or EffectKind.Detonate or EffectKind.Acid)
-            for (int i = 0; i < 3; i++) DrawCircle(centre + new Vector2(i * size * .5f - size * .5f, size * 1.8f), size * .1f, color);
+        Emblem emblem = card.Definition.Piece switch
+        {
+            PieceKind.Marksman => Emblem.Rifle, PieceKind.Breacher => Emblem.Hammer,
+            PieceKind.Medic => Emblem.Heal, PieceKind.Sentinel => Emblem.Shield,
+            _ => card.Definition.Effect switch
+            {
+                EffectKind.Corrode or EffectKind.Detonate or EffectKind.Acid => Emblem.Corrosion,
+                EffectKind.Recon => Emblem.Recon, EffectKind.Mark or EffectKind.Exposed => Emblem.Mark,
+                EffectKind.March or EffectKind.Advance or EffectKind.Push or EffectKind.Pull => Emblem.Move,
+                EffectKind.Jam => Emblem.Jam, EffectKind.Trap or EffectKind.Mine => Emblem.Hazard,
+                EffectKind.Repair => Emblem.Heal, EffectKind.Draw => Emblem.Deck,
+                EffectKind.RecoverSupply or EffectKind.Amplify or EffectKind.SupplyUse => Emblem.Inventory,
+                _ => CategoryEmblem(card.Definition.Kind)
+            }
+        };
+        DrawEmblem(emblem, new Rect2(centre - Vector2.One * size * 1.2f, Vector2.One * size * 2.4f), color);
     }
 
     private Enemy? HoveredEnemy(Combat battle) => battle.Enemies.LastOrDefault(e =>
@@ -79,7 +64,7 @@ public partial class GameView
         EnemyRole.Shield => "Adjacent allies reduce incoming direct damage by 2. Move them apart or jam the shield to break the formation.",
         EnemyRole.Controller => "Places a live hazard on its committed tile. Entering it damages and roots troops; riot units can push you into it.",
         EnemyRole.Commander => "Command arms allies within two cells for +2 attack damage. Destroy or jam the officer, or break its formation.",
-        EnemyRole.Reinforcer => "Calls a drone into a fixed landing tile. Block the tile or jam the call. New drones act next round. Squad cap: six.",
+        EnemyRole.Reinforcer => "Calls a drone into a fixed landing tile. Block the tile or jam the call. New drones act next round. Larger districts permit more reinforcements.",
         EnemyRole.Pusher => "Leaps like a knight and attacks. Pushes its committed target toward a nearby live hazard, or one cell back.",
         _ => "Moves one orthogonal cell, then follows a repeating attack and recovery routine."
     };
@@ -88,24 +73,31 @@ public partial class GameView
     {
         var intent = battle.GetIntent(enemy);
         Vector2 p = UnitPosition("e" + enemy.Id, enemy.Cell) + new Vector2(0, -77);
-        string icon = enemy.Jammed > 0 ? "-" : enemy.Step.Kind switch
+        Emblem icon = enemy.Jammed > 0 ? Emblem.Jam : enemy.Step.Kind switch
         {
-            EnemyActionKind.Attack => "X", EnemyActionKind.Push => ">",
-            EnemyActionKind.Reinforce => "B", EnemyActionKind.Mark => "+",
-            EnemyActionKind.Command => "^", EnemyActionKind.Summon => "*",
-            EnemyActionKind.Rest => ".", _ => "#"
+            EnemyActionKind.Attack => Emblem.Battle, EnemyActionKind.Push => Emblem.Move,
+            EnemyActionKind.Reinforce => Emblem.Shield, EnemyActionKind.Mark => Emblem.Mark,
+            EnemyActionKind.Command => Emblem.Boss, EnemyActionKind.Summon => Emblem.Summon,
+            EnemyActionKind.Rest => Emblem.Rest, _ => Emblem.Hazard
         };
         Box(new Rect2(p - new Vector2(22, 14), new Vector2(44, 25)), Ink, Line);
-        Text(icon, p.X - 14, p.Y + 5, 17, enemy.Jammed > 0 ? Muted : Warning, _mono);
+        DrawEmblem(icon, new Rect2(p - new Vector2(23, 15), new Vector2(28, 28)), enemy.Jammed > 0 ? Muted : Warning.Lightened(.15f));
         if (intent.Power.HasValue)
         {
             string numeric = (enemy.Step.Kind == EnemyActionKind.Reinforce ? "+" : "") + intent.Power.Value;
             Text(numeric, p.X + 1, p.Y + 5, 12, Paper, _mono);
         }
         else if (!intent.Observed) Text("?", p.X + 4, p.Y + 5, 12, Muted, _mono);
-        if (enemy.Mark > 0 || enemy.Corrosion > 0)
-            Text((enemy.Mark > 0 ? $"+{enemy.Mark} " : "") + (enemy.Corrosion > 0 ? $"C{enemy.Corrosion}" : ""),
-                p.X - 23, p.Y - 22, 12, CategoryColor(CardKind.Action), _mono);
+        if (enemy.Mark > 0)
+        {
+            DrawEmblem(Emblem.Mark, new Rect2(p.X - 27, p.Y - 43, 20, 20), CategoryColor(CardKind.Action));
+            Text($"{enemy.Mark}", p.X - 7, p.Y - 27, 12, Paper, _mono);
+        }
+        if (enemy.Corrosion > 0)
+        {
+            DrawEmblem(Emblem.Corrosion, new Rect2(p.X + 4, p.Y - 43, 20, 20), CategoryColor(CardKind.Troop));
+            Text($"{enemy.Corrosion}", p.X + 24, p.Y - 27, 12, Paper, _mono);
+        }
         _hotspots.Add(new Hotspot("intent-" + enemy.Id, new Rect2(p - new Vector2(24, 15), new Vector2(48, 29)), () =>
         { _selectedEnemy = enemy.Id; _selectedTroop = null; _selectedCard = null; }, _lock <= 0));
     }
@@ -175,13 +167,17 @@ public partial class GameView
     private void DrawSupplyBelt(Combat battle)
     {
         _inspectedSupply = null;
-        Text("Supplies", 36, 593, 14, Muted);
+        DrawEmblem(Emblem.Inventory, new Rect2(32, 562, 28, 28));
+        Text($"{battle.SupplyUses}", 65, 583, 15, Muted, _mono);
         for (int i = 0; i < 3; i++)
         {
             int slot = i;
-            var rect = new Rect2(36 + i * 104, 603, 96, 28);
-            string label = i < battle.Supplies.Count ? battle.Supplies[i].Replace("-vial", "").ToUpperInvariant() : "EMPTY";
-            Button("supply-" + i, label, rect, () => SelectSupply(slot), i < battle.Supplies.Count && battle.Phase == Phase.Cards && battle.SupplyUses > 0);
+            var rect = new Rect2(36 + i * 64, 594, 52, 40);
+            bool present = i < battle.Supplies.Count;
+            Box(rect, Ink, Line.Darkened(.25f));
+            IconButton("supply-" + i, present ? SupplyEmblem(battle.Supplies[i]) : Emblem.Inventory,
+                present ? Content.Supply(battle.Supplies[i]).Name : "Empty supply slot", rect, () => SelectSupply(slot),
+                present && battle.Phase == Phase.Cards && battle.SupplyUses > 0);
             if (i < battle.Supplies.Count && (_keyboardFocus ? _focus == "supply-" + i : rect.HasPoint(_mouse)))
                 _inspectedSupply = battle.Supplies[i];
             if (_selectedSupply == i) DrawRect(rect.Grow(2), Territory, false, 1);
@@ -319,7 +315,8 @@ public partial class GameView
 
     private void DrawTurnNotice()
     {
-        if (_noticeTime <= 0 || _modal.Length > 0 || _title || _effects.Any(e => e.Impact.Combos.Length > 0)) return;
+        if (_noticeTime <= 0 || _modal.Length > 0 || _title || _run.Screen is RunScreen.Complete or RunScreen.Defeat ||
+            _run.Battle?.Phase is Phase.Victory or Phase.Defeat || _effects.Any(e => e.Impact.Combos.Length > 0)) return;
         Box(new Rect2(374, 91, 672, 73), Ink, Line);
         Text(_turnNotice, 395, 120, 23, Paper, _bold);
         Text(_turnDetail, 395, 147, 15, Muted);

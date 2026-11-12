@@ -119,7 +119,7 @@ public sealed partial class Combat
         int enemyId = 1;
         foreach (var spawn in spawns)
         {
-            if (!board.Cells.Contains(spawn.Cell) || board.Terrain.Contains(spawn.Cell) ||
+            if (!board.Accessible(spawn.Cell) ||
                 _enemies.Any(e => e.Cell == spawn.Cell))
                 throw new ArgumentException("Enemy spawn must be on an unoccupied accessible cell.", nameof(spawns));
             _enemies.Add(new Enemy(enemyId++, spawn));
@@ -202,7 +202,7 @@ public sealed partial class Combat
         }
     }
 
-    public bool IsDenied(Cell cell) => Board.Terrain.Contains(cell) ||
+    public bool IsDenied(Cell cell) => Board.Terrain.Contains(cell) || Board.Walls.Contains(cell) || Board.Cover.ContainsKey(cell) ||
         _tiles.Any(t => t.Cell == cell && t.Kind is TileKind.Barricade or TileKind.Lockdown);
     public bool IsOccupied(Cell cell) => _troops.Any(t => t.Cell == cell) || _enemies.Any(e => e.Cell == cell);
     public bool CanEnter(Cell cell) => Board.Cells.Contains(cell) && !IsDenied(cell) && !IsOccupied(cell);
@@ -210,6 +210,8 @@ public sealed partial class Combat
     public HashSet<Cell> CardTargets(int id)
     {
         var card = GetCard(id);
+        if (card.Definition.Effect == EffectKind.Pulse)
+            return _enemies.Select(e => e.Cell).Concat(Board.Cover.Keys).ToHashSet();
         if (card.Definition.Effect == EffectKind.Repair)
             return _troops.Where(t => t.Hp < t.MaxHp).Select(t => t.Cell).ToHashSet();
         return card.Definition.Target switch
@@ -245,7 +247,9 @@ public sealed partial class Combat
         switch (def.Effect)
         {
             case EffectKind.Deploy:
-                _troops.Add(new Troop(card, target!.Value));
+                var deployed = new Troop(card, target!.Value);
+                _troops.Add(deployed);
+                TriggerFriendlyTile(deployed);
                 break;
             case EffectKind.Network:
                 OrganisationBlock += 7 + upgrade * 3;
@@ -303,7 +307,7 @@ public sealed partial class Combat
                 PieceKind.Medic => Math.Max(dx, dy) == 1,
                 _ => dx + dy == 1
             };
-            return matches && CanEnter(cell);
+            return matches && CanEnter(cell) && Board.CanTraverse(troop.Cell, cell, troop.Kind == PieceKind.Breacher);
         }).ToHashSet();
     }
 
@@ -334,7 +338,7 @@ public sealed partial class Combat
     public HashSet<Cell> AttackCells(PieceKind kind, Cell from) => Board.Cells.Where(cell =>
     {
         int dx = Math.Abs(cell.X - from.X), dy = Math.Abs(cell.Y - from.Y);
-        return kind switch
+        return Board.ClearFire(from, cell) && (kind switch
         {
             PieceKind.Runner => dx + dy == 1,
             PieceKind.Marksman => dx == 0 && cell.Y < from.Y && dy <= 4,
@@ -343,12 +347,13 @@ public sealed partial class Combat
             PieceKind.Medic => dx + dy == 1,
             PieceKind.Sentinel => Math.Max(dx, dy) == 1,
             _ => false
-        };
+        });
     }).ToHashSet();
 
     public (int Damage, string[] Combos) PreviewAttack(Troop troop, Enemy enemy)
     {
-        int amount = troop.Damage + StrikeBonus + (HasRelic("command") ? 1 : 0);
+        int amount = troop.Damage + StrikeBonus + (HasRelic("command") ? 1 : 0) +
+            HeightBonus(troop.Cell, enemy.Cell, troop.Kind is PieceKind.Marksman or PieceKind.Sapper);
         var combos = new List<string>();
         if (troop.AttackBonus > 0) { amount += troop.AttackBonus; combos.Add("UNITED FRONT"); }
         if (troop.HoldBonus > 0 && troop.MovesMade == 0) { amount += troop.HoldBonus; combos.Add("HOLD FAST"); }
@@ -416,14 +421,14 @@ public sealed partial class Combat
     private HashSet<Cell> PatternCells(AttackPattern pattern, Cell origin) => Board.Cells.Where(cell =>
     {
         int dx = Math.Abs(cell.X - origin.X), dy = Math.Abs(cell.Y - origin.Y);
-        return pattern switch
+        return Board.ClearFire(origin, cell) && (pattern switch
         {
             AttackPattern.Cross => (dx == 0 || dy == 0) && dx + dy <= 2,
             AttackPattern.Adjacent => Math.Max(dx, dy) <= 1,
             AttackPattern.Column => dx == 0,
             AttackPattern.Row => dy == 0,
             _ => false
-        };
+        });
     }).ToHashSet();
 
     public bool IsObserved(Enemy enemy) => IntelRounds > 0 || _troops.Any(t => t.Cell.Distance(enemy.Cell) <= 2);
@@ -446,7 +451,7 @@ public sealed partial class Combat
         };
         string detail = !observed ? "SIGNAL OBSCURED" : enemy.Step.Kind switch
         {
-            EnemyActionKind.Attack or EnemyActionKind.Push => $"{enemy.Step.Name} / {PlannedEnemyPower(enemy)} damage",
+            EnemyActionKind.Attack or EnemyActionKind.Push => $"{enemy.Step.Name} / {PlannedEnemyPower(enemy)} organisation damage",
             EnemyActionKind.Reinforce => $"{enemy.Step.Name} / +{enemy.Step.Power} guard",
             EnemyActionKind.Lockdown => $"{enemy.Step.Name} / deny marked tiles",
             _ => enemy.Step.Name

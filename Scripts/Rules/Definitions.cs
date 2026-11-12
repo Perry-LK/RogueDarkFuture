@@ -40,13 +40,13 @@ public sealed record EnemyDef(string Id, string Name, int Hp, EnemyStep[] Routin
     EnemyRole Role = EnemyRole.Standard, EnemyMove Movement = EnemyMove.Hold);
 public sealed record Spawn(EnemyDef Definition, Cell Cell);
 
-public sealed class Board
+public sealed partial class Board
 {
     public HashSet<Cell> Cells { get; } = new();
     public HashSet<Cell> Terrain { get; } = new();
     public HashSet<Cell> Deployment { get; } = new();
-    public int Width => 7;
-    public int Height => 6;
+    public int Width { get; private set; } = 7;
+    public int Height { get; private set; } = 6;
 
     public Board(int variant = 0)
     {
@@ -164,9 +164,8 @@ public static partial class Content
 
     public static List<Card> StartingDeck()
     {
-        string[] ids = ["runner", "marksman", "breacher", "sentinel",
-            "network", "network", "armour", "intercept",
-            "recon", "march", "strike", "exposed", "pulse", "mark", "corrode", "detonate"];
+        string[] ids = ["runner", "runner", "pulse", "pulse", "pulse",
+            "network", "network", "network", "recon", "march"];
         return ids.Select((id, index) => new Card(index + 1, Card(id))).ToList();
     }
 }

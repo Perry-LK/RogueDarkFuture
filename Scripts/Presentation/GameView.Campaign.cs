@@ -8,33 +8,24 @@ namespace FutureDark.Presentation;
 public partial class GameView
 {
     private static readonly GColour Territory = new("#a98a55");
-    private static string RoomIcon(RoomKind kind) => kind switch
-    { RoomKind.Battle => "X", RoomKind.Elite => "!", RoomKind.Vendor => "$", RoomKind.Event => "?", _ => "W" };
 
     private void DrawCityOverview()
     {
         Text("A city, taken back street by street.", 52, 140, 34, Paper, _bold);
         Text("Select a district. Its route opens a new front.", 54, 176, 18, Muted);
-        Vector2[][] districts =
-        [
-            [new(298, 256), new(477, 211), new(596, 233), new(693, 290), new(705, 331), new(643, 399),
-                new(654, 491), new(591, 548), new(596, 612), new(424, 661), new(291, 607), new(227, 462), new(260, 392)],
-            [new(760, 253), new(875, 208), new(1076, 227), new(1101, 274), new(1224, 322), new(1260, 454),
-                new(1226, 596), new(1092, 651), new(942, 660), new(789, 594), new(805, 520), new(866, 453), new(843, 345)],
-            [new(714, 348), new(806, 353), new(830, 420), new(800, 495), new(708, 496), new(673, 423)]
-        ];
+        var districts = CityDistricts();
         for (int d = 0; d < districts.Length; d++)
         {
             var polygon = districts[d];
             int act = d + 1;
             bool taken = _run.CompletedActs.Contains(act);
-            bool available = act == 3 ? _run.CentreUnlocked : !taken && (act == 1 || _run.CompletedActs.Contains(act - 1));
+            bool available = act == RunState.FinaleAct ? _run.CentreUnlocked : !taken && (act == 1 || _run.CompletedActs.Contains(act - 1));
             DrawPolygon(polygon, [taken ? new GColour("#302b22") : new GColour("#171f23")]);
             Outline(polygon, taken ? Territory : available ? Paper.Darkened(.2f) : Line, taken ? 3 : 2);
             var random = new Random(d + 441);
             int minX = (int)polygon.Min(p => p.X), maxX = (int)polygon.Max(p => p.X);
             int minY = (int)polygon.Min(p => p.Y), maxY = (int)polygon.Max(p => p.Y);
-            for (int i = 0; i < (d == 2 ? 60 : 340); i++)
+            for (int i = 0; i < (act == RunState.FinaleAct ? 60 : 210); i++)
             {
                 float x = random.Next(minX, maxX) / 12 * 12, y = random.Next(minY, maxY) / 12 * 12;
                 var centre = new Vector2(x, y);
@@ -45,7 +36,7 @@ public partial class GameView
                 if (!Geometry2D.IsPointInPolygon(rect.End, polygon)) continue;
                 if (d == 0 && i % 3 == 0) DrawRect(rect, Line.Darkened(.2f), false, 1);
                 else DrawRect(rect, taken ? Territory.Darkened(.63f) : Line.Darkened(.35f));
-                if (d == 1) DrawLine(centre, centre + new Vector2(0, -height * .3f), Line, 1);
+                if (d >= 3) DrawLine(centre, centre + new Vector2(0, -height * .3f), Line, 1);
             }
             for (int street = 0; street < 7; street++)
             {
@@ -77,64 +68,20 @@ public partial class GameView
                     else previous = null;
                 }
             }
-            Vector2 label = d == 0 ? new(322, 410) : d == 1 ? new(946, 413) : new(685, 402);
-            Box(new Rect2(label - new Vector2(12, 26), new Vector2(d == 2 ? 146 : 237, 80)), Ink, taken ? Territory : Line);
-            Text(d == 0 ? "01 / Outer Blocks" : d == 1 ? "02 / Glass Ward" : "The centre", label.X, label.Y, d == 2 ? 20 : 25, Paper, _bold);
+            Vector2 label = act == RunState.FinaleAct ? new(647, 436) : DistrictLabel(d);
+            Box(new Rect2(label - new Vector2(12, 26), new Vector2(act == RunState.FinaleAct ? 169 : 210, 76)), Ink, taken ? Territory : Line);
+            Text(act == RunState.FinaleAct ? "Central Command" : $"{act:00} / {RunState.ActTitle(act)[4..]}", label.X, label.Y, 17, Paper, _bold);
             Text(taken ? "Liberated" : available ? "Enter district >" : "No connection", label.X, label.Y + 30, 15, taken ? Territory : Muted);
-            _hotspots.Add(new Hotspot("district-" + act, new Rect2(label - new Vector2(12, 26), new Vector2(d == 2 ? 146 : 237, 80)),
+            _hotspots.Add(new Hotspot("district-" + act, new Rect2(label - new Vector2(12, 26), new Vector2(act == RunState.FinaleAct ? 169 : 210, 76)),
                 () => { if (Act(_run.StartAct(act))) { ClearSelection(); _cardMotions.Clear(); } }, available && _lock <= 0, polygon));
         }
-        Text("Abandoned blocks", 308, 707, 17, Muted);
-        Text("Corporate high-rises", 988, 707, 17, Muted);
         Rule(54, 753, 1330);
         Text($"{_run.CompletedActs.Count}/{RunState.MainActCount} districts liberated", 54, 794, 23, Territory, _bold);
-        Paragraph(_run.CentreUnlocked ? "The city is yours except for its heart. Central Command is now accessible." :
-            "Central Command unlocks after two-thirds of the city's districts. With two acts, both must fall.", 54, 833, 1030, 17, Muted, 2);
+        Paragraph(_run.CentreUnlocked ? _run.CompletedActs.Count == RunState.MainActCount ?
+            "All five districts are yours. Central Command is the final target." :
+            "Central Command is accessible. Enter the centre, or secure the remaining district first." :
+            "Liberate four districts to expose the centre. The fifth district is an optional challenge.", 54, 833, 1030, 17, Muted, 2);
         Button("city-deck", "REVIEW YOUR DECK", new Rect2(1140, 782, 244, 43), () => OpenDeck("RUN"));
-    }
-
-    private Vector2 RoutePosition(RouteNode node)
-        => _run.Act == 3 ? new Vector2(720, 455) : new Vector2(130 + node.Column * 147, 338 + node.Row * 150);
-
-    private void DrawActMap()
-    {
-        Text(_run.ActName, 50, 143, 38, Paper, _bold);
-        Text(_run.Act == 1 ? "Broken streets. Small victories. Follow the signal." :
-            _run.Act == 2 ? "Clean glass. Dirty power. The squads here work together." : "The last barrier between the city and its people.", 53, 183, 19, Muted);
-        Text($"Route progress   {_run.Completed.Count}/{(_run.Act == 3 ? 1 : 9)} rooms", 1080, 141, 18, Muted);
-        Rule(54, 211, 1330);
-        var mapRandom = new Random(_run.Seed ^ _run.Act);
-        for (int i = 0; i < 85; i++)
-        {
-            float x = mapRandom.Next(50, 1390), y = mapRandom.Next(245, 754);
-            DrawRect(new Rect2(x, y, mapRandom.Next(8, 39), mapRandom.Next(6, 24)), Line.Darkened(.67f), false, 1);
-        }
-        foreach (var node in _run.Nodes)
-        foreach (string next in node.Next)
-        {
-            var child = _run.Nodes.Single(n => n.Id == next);
-            bool used = _run.Completed.Contains(node.Id) && (_run.Completed.Contains(child.Id) || _run.Available.Contains(child.Id));
-            Vector2 a = RoutePosition(node), b = RoutePosition(child);
-            Vector2 bend = new((a.X + b.X) / 2, a.Y);
-            DrawPolyline([a, bend, b], used ? Territory : Line.Darkened(.1f), used ? 3 : 1, true);
-        }
-        foreach (var node in _run.Nodes)
-        {
-            Vector2 p = RoutePosition(node);
-            bool complete = _run.Completed.Contains(node.Id), available = _run.Available.Contains(node.Id);
-            var color = complete ? Territory : node.Kind == RoomKind.Elite ? Warning : available ? Paper : Muted.Darkened(.35f);
-            DrawCircle(p, node.IsBoss ? 28 : 22, Panel);
-            DrawArc(p, node.IsBoss ? 28 : 22, 0, Mathf.Tau, 32, color, available ? 3 : 1, true);
-            Text(complete ? "+" : RoomIcon(node.Kind), p.X - 7, p.Y + 7, 22, color, _mono);
-            if (available) Text("Available", p.X - 29, p.Y + 43, 13, Paper);
-            if (node.IsBoss) Text("District boss", p.X - 43, p.Y + 55, 15, Muted);
-            _hotspots.Add(new Hotspot("node-" + node.Id, new Rect2(p - new Vector2(32, 32), new Vector2(64, 64)), () =>
-            { _roomDialog = node.Id; OpenModal("room"); }, _lock <= 0));
-        }
-        Rule(54, 782, 1330);
-        Text("X  Battle       ?  Event       !  Red zone elite       $  Vendor       W  Boss", 54, 821, 17, Muted);
-        Text("Click a room to inspect it. Committing to a branch leaves the others behind.", 54, 856, 16, Muted);
-        Button("map-deck", "DECK", new Rect2(1230, 809, 153, 41), () => OpenDeck("RUN"));
     }
 
     private void DrawRoomDialog()
@@ -142,8 +89,8 @@ public partial class GameView
         var node = _run.Nodes.SingleOrDefault(n => n.Id == _roomDialog);
         if (node is null) { Text("No room selected.", 450, 400); return; }
         Box(new Rect2(398, 238, 644, 411), Ink, node.Kind == RoomKind.Elite ? Warning : Line);
-        Text(RoomIcon(node.Kind), 431, 292, 36, node.Kind == RoomKind.Elite ? Warning : Territory, _mono);
-        Text(node.Kind.ToString(), 480, 286, 19, Muted);
+        DrawEmblem(RoomEmblem(node.Kind), new Rect2(425, 250, 51, 51));
+        Text(node.Kind.ToString(), 491, 286, 19, Muted);
         Paragraph(node.Name, 431, 339, 572, 32, Paper, 2, _bold);
         Paragraph(node.Subtitle, 431, 414, 572, 20, Muted, 3);
         Paragraph(node.Kind == RoomKind.Elite ? "Expect mutually supporting specialists. Breaking their setup is safer than trading damage. Relic and increased funds on victory." :
@@ -285,31 +232,24 @@ public partial class GameView
 
     private static bool PersistenceError(Exception error) => error is System.IO.IOException or UnauthorizedAccessException or JsonException or InvalidOperationException;
 
-    private void SaveRun()
+    private bool TrySaveRun()
     {
-        if (_title) return;
         try
         {
             _saves.Save(_run);
-            Act(CommandResult.Success("Saved to this run's slot. Loading returns to the current room's entrance."));
-            NotifyTurn("Run saved", "One slot for this run. The room will restart on load.");
+            return true;
         }
         catch (Exception error) when (PersistenceError(error))
         {
             GD.PushError(error.ToString());
             Act(CommandResult.Reject("Save failed: " + error.Message));
+            return false;
         }
     }
 
     private void DeleteFinishedSave()
     {
-        try { _saves.Delete(_run.RunId); _deletedRun = _run.RunId; }
-        catch (Exception error) when (PersistenceError(error))
-        {
-            GD.PushError(error.ToString());
-            Act(CommandResult.Reject("Could not delete the defeated run's save: " + error.Message));
-            _deletedRun = _run.RunId;
-        }
+        SettleRun();
     }
 
     private void OpenSaves()
@@ -331,9 +271,17 @@ public partial class GameView
 
     private void LoadRun(string id)
     {
+        if (!_servicesReady) { Act(CommandResult.Reject("Progression storage is unavailable.")); return; }
         try
         {
+            if (_profile.AwardedRuns.Contains(id))
+            {
+                _saves.Delete(id);
+                Act(CommandResult.Reject("That run has already ended. Its stale checkpoint was removed."));
+                return;
+            }
             var loaded = _saves.Load(id);
+            _saves.Save(loaded);
             Restart();
             _run = loaded;
             _title = false;
@@ -351,9 +299,9 @@ public partial class GameView
     {
         Box(new Rect2(188, 117, 1064, 687), Ink, Line);
         Text("Continue a resistance cell.", 222, 167, 33, Paper, _bold);
-        Text("Manual saves only. Loading restarts the room. Defeat deletes that run's slot.", 225, 205, 17, Muted);
+        Text("Three concurrent runs. Autosave at room entry. Continue resumes the latest played.", 225, 205, 17, Muted);
         int pages = Math.Max(1, (_saveEntries.Count + 4) / 5);
-        if (_saveEntries.Count == 0) Text("No saved runs yet. Use Save Run or F5 while playing.", 225, 302, 21, Muted);
+        if (_saveEntries.Count == 0) Text("No active runs. Start a new resistance cell.", 225, 302, 21, Muted);
         for (int i = 0; i < Math.Min(5, _saveEntries.Count - _savePage * 5); i++)
         {
             var entry = _saveEntries[_savePage * 5 + i];
@@ -363,9 +311,10 @@ public partial class GameView
             {
                 Text($"Act {saved.Act} / seed {saved.Seed}", 241, y + 28, 21, Paper, _bold);
                 Text($"{saved.Hp} HP  |  {saved.Funds} funds  |  {entry.Modified.ToLocalTime():g}", 241, y + 53, 15, Muted);
-                Button("load-" + entry.RunId, "LOAD", new Rect2(1076, y + 17, 121, 39), () => LoadRun(entry.RunId));
+                Button("load-" + entry.RunId, "RESUME", new Rect2(931, y + 17, 121, 39), () => LoadRun(entry.RunId));
             }
-            else Paragraph("Unreadable save: " + entry.Error, 241, y + 28, 940, 16, Warning, 2);
+            else Paragraph("Unreadable save: " + entry.Error, 241, y + 28, 660, 16, Warning, 2);
+            Button("abandon-" + entry.RunId, "ABANDON", new Rect2(1070, y + 17, 128, 39), () => { _abandonId = entry.RunId; OpenModal("abandon-slot"); });
         }
         Button("saves-close", "BACK", new Rect2(222, 742, 180, 39), () => _modal = "");
         Button("saves-prev", "<", new Rect2(865, 742, 48, 39), () => _savePage--, _savePage > 0);

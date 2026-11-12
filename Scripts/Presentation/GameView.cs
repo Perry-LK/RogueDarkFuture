@@ -60,9 +60,11 @@ public partial class GameView : Control
     private float _nextSmokeStep;
     private string? _smokeSaveDirectory;
 
-    private sealed record Hotspot(string Id, Rect2 Rect, Action Click, bool Enabled, Vector2[]? Polygon = null)
+    private sealed record Hotspot(string Id, Rect2 Rect, Action Click, bool Enabled, Vector2[]? Polygon = null,
+        string Tooltip = "", Rect2? Clip = null)
     {
-        public bool Contains(Vector2 point) => Polygon is null ? Rect.HasPoint(point) : Geometry2D.IsPointInPolygon(point, Polygon);
+        public bool Contains(Vector2 point) => (!Clip.HasValue || Clip.Value.HasPoint(point)) &&
+            (Polygon is null ? Rect.HasPoint(point) : Geometry2D.IsPointInPolygon(point, Polygon));
     }
     private sealed record VisualImpact(Impact Impact, float Start);
 
@@ -76,27 +78,33 @@ public partial class GameView : Control
         MouseFilter = MouseFilterEnum.Stop;
         FocusMode = FocusModeEnum.All;
         GrabFocus();
-        LoadSettings();
-        _saves = new RunSaveStore(ProjectSettings.GlobalizePath("user://runs"));
         string[] args = OS.GetCmdlineUserArgs();
         _smoke = args.Contains("--smoke-test");
         _screenshotPath = args.FirstOrDefault(a => a.StartsWith("--screenshot=", StringComparison.Ordinal))?["--screenshot=".Length..];
         _smokeScreen = args.FirstOrDefault(a => a.StartsWith("--smoke-screen=", StringComparison.Ordinal))?["--smoke-screen=".Length..] ?? "combo";
+        InitializePersistence();
+        LoadSettings();
+        InitializeAudio();
+        GetTree().AutoAcceptQuit = false;
+        GetWindow().CloseRequested += () => SaveAndExit(true);
         if (_smoke) StartVisualSmoke();
-        else _run = new RunState(NewSeed());
+        else _run = new RunState(NewSeed(), _profile.Tier);
+        ApplyAudio();
     }
 
     private static int NewSeed() => (int)(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() & int.MaxValue);
 
     public override void _Process(double delta)
     {
-        _scale = Math.Min(Size.X / 1440f, Size.Y / 900f);
+        _scale = Math.Min(Size.X / 1440f, Size.Y / 900f) * _uiScale;
         _origin = (Size - new Vector2(1440, 900) * _scale) / 2;
         _mouse = (GetLocalMousePosition() - _origin) / _scale;
-        _lock = Math.Max(0, _lock - (float)delta);
-        _effectClock += (float)delta;
-        UpdatePresentation((float)delta);
-        if (!_title && (_run.Battle?.Phase == Phase.Defeat || _run.Screen == RunScreen.Defeat) && _deletedRun != _run.RunId)
+        float animationDelta = (float)delta * (_fastAnimations ? 2 : 1);
+        _lock = Math.Max(0, _lock - animationDelta);
+        _effectClock += animationDelta;
+        UpdatePresentation(animationDelta);
+        AutoCheckpoint();
+        if (!_title && (_run.Battle?.Phase == Phase.Defeat || _run.Screen is RunScreen.Defeat or RunScreen.Complete) && _settlementAttempt != _run.RunId)
             DeleteFinishedSave();
         _effects.RemoveAll(e => _effectClock - e.Start > 1.8f);
         _boardImpulse = Vector2.Zero;
@@ -104,7 +112,7 @@ public partial class GameView : Control
         {
             float age = _effectClock - _effects.First(e => e.Impact.Combos.Length > 0).Start;
             if (age >= 0 && age < .32f)
-                _boardImpulse = new Vector2(Mathf.Sin(age * 75), Mathf.Cos(age * 63)) * (1 - age / .32f) * 3;
+                _boardImpulse = new Vector2(Mathf.Sin(age * 75), Mathf.Cos(age * 63)) * (1 - age / .32f) * 3 * _shakeStrength;
         }
         QueueRedraw();
         if (_smoke) StepVisualSmoke(++_smokeFrame);
@@ -116,6 +124,7 @@ public partial class GameView : Control
         DrawSetTransform(_origin, 0, Vector2.One * _scale);
         _hotspots.Clear();
         _hoverCard = null;
+        if (_smoke && _smokeScreen == "icons") { DrawIconStudy(); return; }
         if (_title) DrawTitle();
         else
         {
@@ -144,6 +153,9 @@ public partial class GameView : Control
             if (_modal == "saves") DrawSaves();
             if (_modal == "inventory") DrawInventory();
             if (_modal == "choose-card") DrawCardChoice();
+            if (_modal == "unlocks") DrawUnlocks();
+            if (_modal == "abandon-slot") DrawAbandonSlot();
+            if (_modal == "options") DrawOptions();
         }
         DrawTurnNotice();
         if (_modal.Length > 0 && _message.Length > 0)
@@ -152,11 +164,15 @@ public partial class GameView : Control
             Paragraph(_message, 60, 882, 1300, 16, Warning, 1);
         var focus = _hotspots.LastOrDefault(h => h.Enabled && (_keyboardFocus ? h.Id == _focus : h.Contains(_mouse)));
         if (focus is not null && _keyboardFocus)
-            DrawRect(focus.Rect.Grow(3), Paper, false, 1);
+        {
+            var rect = focus.Clip.HasValue ? focus.Rect.Grow(3).Intersection(focus.Clip.Value) : focus.Rect.Grow(3);
+            if (rect.HasArea()) DrawRect(rect, Paper, false, 1);
+        }
+        if (focus is { Tooltip.Length: > 0 }) DrawTooltip(focus);
     }
 
     private void Text(string text, float x, float y, int size = 16, GColour? color = null, Font? font = null)
-        => DrawString(font ?? _font, new Vector2(x, y), text, HorizontalAlignment.Left, -1, size, color ?? Paper);
+        => DrawString(font ?? _font, new Vector2(x, y), text, HorizontalAlignment.Left, -1, Mathf.RoundToInt(size * _textScale), color ?? Paper);
 
     private void Tag(string text, float x, float y, GColour? color = null) => Text(text, x, y, 11, color ?? Muted, _mono);
     private void Rule(float x, float y, float width, GColour? color = null)
@@ -168,26 +184,29 @@ public partial class GameView : Control
     }
     private void Paragraph(string text, float x, float y, float width, int size = 16, GColour? color = null, int maxLines = 20, Font? font = null)
     {
-        var face = font ?? _font;
-        int lineCount = 0;
+        foreach (string line in WrapParagraph(text, width, size, font ?? _font).Take(maxLines))
+        {
+            Text(line, x, y, size, color, font);
+            y += size * _textScale * 1.35f;
+        }
+    }
+
+    private IEnumerable<string> WrapParagraph(string text, float width, int size, Font face)
+    {
         foreach (string paragraph in text.Split('\n'))
         {
             string line = "";
             foreach (string word in paragraph.Split(' '))
             {
                 string next = line.Length == 0 ? word : line + " " + word;
-                if (face.GetStringSize(next, fontSize: size).X > width && line.Length > 0)
+                if (face.GetStringSize(next, fontSize: Mathf.RoundToInt(size * _textScale)).X > width && line.Length > 0)
                 {
-                    if (++lineCount > maxLines) return;
-                    Text(line, x, y, size, color, face);
-                    y += size * 1.35f;
+                    yield return line;
                     line = word;
                 }
                 else line = next;
             }
-            if (++lineCount > maxLines) return;
-            Text(line, x, y, size, color, face);
-            y += size * 1.35f;
+            yield return line;
         }
     }
 
@@ -197,7 +216,7 @@ public partial class GameView : Control
         bool hover = enabled && ((_keyboardFocus && _focus == id) || (!_keyboardFocus && rect.HasPoint(_mouse)));
         var fill = primary && enabled ? Paper : hover ? Raised.Lightened(.12f) : Panel;
         Box(rect, fill, enabled ? primary ? Paper : hover ? Paper : Line : Line.Darkened(.45f));
-        float textWidth = _mono.GetStringSize(text, fontSize: 12).X;
+        float textWidth = _mono.GetStringSize(text, fontSize: Mathf.RoundToInt(12 * _textScale)).X;
         Text(text, rect.Position.X + (rect.Size.X - textWidth) / 2, rect.Position.Y + rect.Size.Y / 2 + 4,
             12, primary && enabled ? Ink : enabled ? Paper : Muted.Darkened(.4f), _mono);
         _hotspots.Add(new Hotspot(id, rect, click, enabled));
@@ -205,28 +224,28 @@ public partial class GameView : Control
 
     private void DrawHeader()
     {
-        Text("FUTURE / DARK", 30, 36, 23, Paper, _bold);
-        Text(_run.ActName, 30, 61, 14, Muted);
+        DrawEmblem(Emblem.Troop, new Rect2(28, 16, 46, 46), CategoryColor(CardKind.Troop));
+        Text(_run.ActName, 86, 46, 20, Paper, _bold);
         var phase = _run.Battle?.Phase;
         string state = _run.Screen == RunScreen.Combat ? phase switch
         {
-            Phase.Cards => "01  Card play", Phase.Movement => "02  Board orders",
-            Phase.Discard => "03  Discard", Phase.Victory => "Sector secured", _ => "Signal lost"
-        } : _run.Screen switch { RunScreen.City => "City control", RunScreen.Map => "Choose your route", RunScreen.Vendor => "Night exchange", _ => "Resolve encounter" };
+            Phase.Cards => "Cards", Phase.Movement => "Orders",
+            Phase.Discard => "Cleanup", Phase.Victory => "Secured", _ => "Lost"
+        } : _run.Screen switch { RunScreen.City => "City", RunScreen.Map => "Route", RunScreen.Vendor => "Trade", _ => "Encounter" };
         if (_turnNotice == "Enemy turn" && _noticeTime > 0) state = "Enemy response";
-        Box(new Rect2(263, 18, 240, 48), Raised, Line);
-        DrawCategoryIcon(phase == Phase.Movement ? CardKind.Board : CardKind.Action, new Vector2(286, 42), 12, Paper);
-        Text(state, 312, 47, 18, Paper);
-        Text($"HP  {_run.Hp}/{RunState.MaxHp}", 528, 36, 19, Paper, _mono);
-        Text($"Block  {_run.Battle?.OrganisationBlock ?? 0}", 528, 59, 14, Muted);
-        Text($"{_run.Funds} funds", 715, 36, 19, Paper, _mono);
-        Text($"{_run.Deck.Count} cards / {_run.Relics.Count} relics", 715, 59, 14, Muted);
-        Button("inventory", "INVENTORY", new Rect2(902, 24, 118, 36), () => OpenModal("inventory"));
-        Button("save", "SAVE RUN", new Rect2(1032, 24, 105, 36), SaveRun,
-            _run.Screen is not (RunScreen.Defeat or RunScreen.Complete) && _run.Battle?.Phase != Phase.Defeat);
-        Button("guide", "GUIDE", new Rect2(1149, 24, 86, 36), () => OpenModal("guide"));
-        Button("sound", _muted ? "MUTED" : "SOUND", new Rect2(1247, 24, 79, 36), ToggleMute);
-        Button("restart", "MENU", new Rect2(1338, 24, 70, 36), () => OpenModal("restart"));
+        DrawEmblem(_run.Screen == RunScreen.Combat ? phase == Phase.Movement ? Emblem.Move : Emblem.Deck : Emblem.Route,
+            new Rect2(283, 23, 32, 32));
+        Text(state, 326, 46, 17, Muted);
+        IconButton("health-info", Emblem.Health, "Organisation HP: persists between encounters", new Rect2(488, 20, 120, 40), () => OpenModal("guide"), count: $"{_run.Hp}/{RunState.MaxHp}");
+        IconButton("block-info", Emblem.Shield, "Organisation block: separate from troop protection", new Rect2(628, 20, 72, 40), () => OpenModal("guide"), count: $"{_run.Battle?.OrganisationBlock ?? 0}");
+        IconButton("funds-info", Emblem.Funds, "Funds: shared across this run", new Rect2(720, 20, 100, 40), () => OpenModal("inventory"), count: $"{_run.Funds}");
+        IconButton("header-deck", Emblem.Deck, "Cards in your run deck", new Rect2(845, 20, 77, 40), () => OpenDeck("RUN"), count: $"{_run.Deck.Count}");
+        IconButton("header-relics", Emblem.Relic, "Run relics", new Rect2(944, 20, 72, 40), () => OpenModal("inventory"), count: $"{_run.Relics.Count}");
+        IconButton("inventory", Emblem.Inventory, "Inventory", new Rect2(1090, 20, 44, 40), () => OpenModal("inventory"));
+        IconButton("unlocks", Emblem.Relic, "Unlock collection", new Rect2(1145, 20, 44, 40), () => OpenModal("unlocks"));
+        IconButton("guide", Emblem.Guide, "Field guide (H)", new Rect2(1200, 20, 44, 40), () => OpenModal("guide"));
+        IconButton("sound", _muted ? Emblem.Mute : Emblem.Sound, _muted ? "Unmute (M)" : "Mute (M)", new Rect2(1255, 20, 44, 40), ToggleMute);
+        IconButton("restart", Emblem.Menu, "Pause menu", new Rect2(1354, 20, 44, 40), () => OpenModal("restart"));
         Rule(30, 81, 1378);
     }
 
@@ -236,15 +255,19 @@ public partial class GameView : Control
         DrawRect(new Rect2(0, 0, 620, 900), Ink);
         Tag("A TACTICAL DECKBUILDING ROGUELIKE", 64, 90);
         Rule(64, 113, 375);
-        Tag("TWO DISTRICTS / ONE FINAL STRONGHOLD", 64, 219);
+        Tag("FIVE DISTRICTS / ONE FINAL STRONGHOLD", 64, 219);
         Text("FUTURE", 54, 343, 112, Paper, _bold);
         Text("DARK", 54, 444, 112, Paper, _bold);
         DrawRect(new Rect2(65, 476, 38, 4), Paper);
         Paragraph("The city is quiet.\nMake your resistance count.", 64, 534, 430, 27, Paper);
-        Paragraph("Build combinations. Position your pieces.\nBreak the pattern.", 64, 630, 400, 18, Muted);
-        Button("begin", "ESTABLISH A SIGNAL  >", new Rect2(64, 713, 362, 56), () => { _title = false; ClearSelection(); }, primary: true);
-        Button("title-load", "CONTINUE A SAVED RUN", new Rect2(64, 784, 240, 38), OpenSaves);
-        Button("title-guide", "GUIDE", new Rect2(316, 784, 110, 38), () => OpenModal("guide"));
+        Paragraph("Build connections. Break the pattern.", 64, 630, 400, 18, Muted);
+        Text($"{Unlocks.Names[_profile.Tier]} / {_profile.Experience} XP", 64, 670, 16, Territory);
+        Button("begin", "NEW RUN  >", new Rect2(64, 694, 362, 46), BeginRun, _servicesReady, primary: true);
+        Button("title-load", "CONTINUE", new Rect2(64, 752, 174, 38), ContinueLatest);
+        Button("title-slots", "RUN SLOTS", new Rect2(252, 752, 174, 38), OpenSaves);
+        Button("title-options", "OPTIONS", new Rect2(64, 803, 110, 36), () => OpenModal("options"));
+        Button("title-unlocks", "UNLOCKS", new Rect2(184, 803, 122, 36), () => OpenModal("unlocks"));
+        Button("title-guide", "GUIDE", new Rect2(316, 803, 110, 36), () => OpenModal("guide"));
         Tag("GODOT / C#    DESKTOP PROTOTYPE", 64, 863);
         Tag("THE SYSTEM SEES PIECES.", 916, 760);
         Text("YOU SEE CONNECTIONS.", 914, 790, 23, Paper, _bold);
@@ -286,8 +309,7 @@ public partial class GameView : Control
         var battle = _run.Battle ?? throw new InvalidOperationException("Combat screen has no battle.");
         Text(_run.CurrentNode!.Name, 36, 125, 23, Paper, _bold);
         Text($"Round {battle.Round}  /  {battle.Enemies.Count} hostiles", 36, 153, 16, Muted);
-        Text("Action points", 842, 122, 15, Muted);
-        Text($"{battle.Ap}", 964, 125, 27, Paper, _mono);
+        IconButton("ap-info", Emblem.Action, "Action points remaining", new Rect2(838, 98, 97, 36), () => OpenModal("guide"), count: $"{battle.Ap}");
         for (int i = 0; i < Math.Min(battle.Ap, 8); i++)
             DrawRect(new Rect2(843 + i * 17, 141, 11, 5), Paper);
         DrawBoard(battle);
@@ -296,28 +318,20 @@ public partial class GameView : Control
         DrawInspector(battle);
         if (_message.Length > 0)
             Paragraph(_message, 374, 626, 1023, 14, _messageError ? Warning : Paper, 1);
-        else
-            Paragraph(PhaseHint(battle), 374, 626, 1023, 13, Muted, 1);
+        else Paragraph(TerrainDescription(battle), 374, 626, 1030, 14, Muted, 1);
         DrawCombatFooter(battle);
         DrawImpacts();
         DrawFlyingCards();
     }
 
-    private static string PhaseHint(Combat battle) => battle.Phase switch
-    {
-        Phase.Cards => "SELECT A CARD, THEN ITS TARGET. UNTARGETED CARDS PLAY ON SELECTION.  [1-9] CARDS / [ESC] CANCEL",
-        Phase.Movement => "SELECT A PIECE. DIAMONDS = LEGAL MOVES / TICKS = AUTOMATIC ATTACK. CLICK THE PIECE AGAIN TO HOLD.",
-        Phase.Discard => $"SELECT {battle.RequiredDiscards} CARDS TO DISCARD. KEEP THE REST. ENEMIES RESOLVE AFTER CONFIRMATION.",
-        Phase.Victory => "SECTOR SECURED. COLLECT YOUR REWARD AND CARRY YOUR REMAINING ORGANISATION HP FORWARD.",
-        _ => "SIGNAL LOST. THE ORGANISATION HAS FALLEN."
-    };
-
-    private Vector2 CellPoint(Cell cell) => new Vector2(633 + (cell.X - cell.Y) * 63, 206 + (cell.X + cell.Y) * 31) + _boardImpulse;
+    private Vector2 CellPoint(Cell cell) => new Vector2(633 + (cell.X - cell.Y) * BoardStep,
+        206 + (cell.X + cell.Y) * BoardStep * 31 / 63 - (_run.Battle?.Board.Level(cell) ?? 0) * 18) + _boardImpulse;
     private Vector2[] Diamond(Cell cell, float inset = 0)
     {
         Vector2 p = CellPoint(cell);
-        return [p + new Vector2(0, -31 + inset / 2), p + new Vector2(63 - inset, 0),
-            p + new Vector2(0, 31 - inset / 2), p + new Vector2(-63 + inset, 0)];
+        float halfHeight = BoardStep * 31 / 63;
+        return [p + new Vector2(0, -halfHeight + inset / 2), p + new Vector2(BoardStep - inset, 0),
+            p + new Vector2(0, halfHeight - inset / 2), p + new Vector2(-BoardStep + inset, 0)];
     }
     private void Outline(Vector2[] points, GColour color, float width = 1)
         => DrawPolyline(points.Append(points[0]).ToArray(), color, width, true);
@@ -344,10 +358,13 @@ public partial class GameView : Control
             Outline(diamond.Select(v => v + new Vector2(0, 12)).ToArray(), Line.Darkened(.55f));
             bool hover = Geometry2D.IsPointInPolygon(_mouse, diamond);
             GColour tile = (cell.X + cell.Y) % 2 == 0 ? new("#222c31") : new("#1c252a");
+            if (_run.Act > 1) tile = new GColour(_run.Act switch { 2 => "#292b29", 3 => "#202c35", 4 => "#292d33", _ => "#1c2c30" })
+                .Darkened((cell.X + cell.Y) % 2 == 0 ? 0 : .06f);
             if (battle.Board.Deployment.Contains(cell)) tile = tile.Lightened(.035f);
             if (hover) tile = tile.Lightened(.055f);
             DrawPolygon(diamond, [tile]);
             Outline(diamond, Line);
+            DrawTerrainDetail(battle, cell);
             if (battle.Board.Deployment.Contains(cell))
             {
                 var inner = Diamond(cell, 9);
@@ -389,6 +406,14 @@ public partial class GameView : Control
         foreach (var cell in ordered)
         {
             if (battle.Board.Terrain.Contains(cell)) DrawTerrain(CellPoint(cell));
+            if (battle.Board.Cover.TryGetValue(cell, out int coverHp))
+            {
+                var position = CellPoint(cell);
+                DrawTerrain(position);
+                Text($"{coverHp}", position.X - 6, position.Y - 28, 12, Territory, _mono);
+                _hotspots.Add(new Hotspot("cover-" + cell, new Rect2(position - new Vector2(30, 45), new Vector2(60, 57)),
+                    () => ClickCell(cell), _lock <= 0 && battle.Phase == Phase.Cards));
+            }
             var troop = battle.Troops.FirstOrDefault(t => t.Cell == cell);
             var enemy = battle.Enemies.FirstOrDefault(e => e.Cell == cell);
             if (troop is not null)
@@ -408,14 +433,14 @@ public partial class GameView : Control
                     () => ClickCell(cell), _lock <= 0 && battle.Phase is Phase.Cards or Phase.Movement));
             }
         }
-        for (int x = 0; x < 7; x++)
+        for (int x = 0; x < battle.Board.Width; x++)
         {
-            Vector2 p = CellPoint(new Cell(x, 5)) + new Vector2(-24, 37);
+            Vector2 p = CellPoint(new Cell(x, battle.Board.Height - 1)) + new Vector2(-24, 37);
             Tag(((char)('A' + x)).ToString(), p.X, p.Y);
         }
-        for (int y = 0; y < 6; y++)
+        for (int y = 0; y < battle.Board.Height; y++)
         {
-            Vector2 p = CellPoint(new Cell(6, y)) + new Vector2(65, 4);
+            Vector2 p = CellPoint(new Cell(battle.Board.Width - 1, y)) + new Vector2(65, 4);
             Tag((y + 1).ToString(), p.X, p.Y);
         }
         if (inspected is not null && battle.GetIntent(inspected).MoveTo is { } destination)
@@ -425,7 +450,10 @@ public partial class GameView : Control
             Outline(Diamond(destination, 8), Warning, 2);
             Text("Move", to.X - 15, to.Y - 10, 13, Warning);
         }
-        Text("V  Deployment     <>  Move     [ ]  Attack     X  Threat", 390, 589, 13, Muted);
+        IconButton("deployment-help", Emblem.Troop, "Deployment area", new Rect2(390, 567, 30, 30), () => OpenModal("guide"));
+        IconButton("movement-help", Emblem.Move, "Legal movement", new Rect2(434, 567, 30, 30), () => OpenModal("guide"));
+        IconButton("attack-help", Emblem.Mark, "Automatic attack coverage", new Rect2(478, 567, 30, 30), () => OpenModal("guide"));
+        IconButton("threat-help", Emblem.Hazard, "Enemy threat coverage", new Rect2(522, 567, 30, 30), () => OpenModal("guide"));
         if (battle.Danger && _haze)
         {
             DrawRect(new Rect2(25, 166, 1000, 423), new GColour(.5f, .16f, .13f, .22f), false, 2);
@@ -530,12 +558,11 @@ public partial class GameView : Control
         Box(rect, selected ? Raised.Lightened(.08f) : hover ? Raised : Panel, selected || hover ? category.Lightened(.25f) : category.Darkened(.4f));
         DrawRect(new Rect2(x, y, width, 29), new GColour(category, .19f));
         DrawRect(new Rect2(x, y, 3, rect.Size.Y), category);
-        DrawCategoryIcon(card.Definition.Kind, new Vector2(x + 16, y + 15), 8, category);
-        Text(card.Definition.Kind.ToString(), x + 31, y + 20, 12, category);
+        DrawCategoryIcon(card.Definition.Kind, new Vector2(x + 19, y + 15), 13, category);
         DrawCircle(new Vector2(x + width - 21, y + 20), 11, expensive ? Line.Darkened(.3f) : Paper);
         Text(card.Definition.Cost.ToString(), x + width - 25, y + 25, 13, expensive ? Muted : Ink, _mono);
         Paragraph(card.Name, x + 13, y + 50, width - 25, width < 160 ? 16 : 19, Paper, 2, _bold);
-        DrawCardStencil(card, new Vector2(x + width - 28, y + 102), 20, new GColour(category, .2f));
+        DrawCardStencil(card, new Vector2(x + width - 36, y + 111), 28, new GColour(category, .32f));
         Rule(x + 13, y + 81, width - 26, category.Darkened(.5f));
         string body = card.Definition.Effect switch
         {
@@ -555,29 +582,28 @@ public partial class GameView : Control
         };
         Paragraph(body, x + 13, y + 106, width - 26, 13, Muted, 3);
         Rule(x + 13, y + rect.Size.Y - 32, width - 26);
-        string footer = selected && _run.Battle?.Phase == Phase.Discard ? "DISCARD [X]" : card.Definition.Target == TargetKind.None ? "INSTANT" :
-            card.Definition.Target == TargetKind.Deployment ? "DEPLOY" : card.Definition.Target == TargetKind.Troop ? "TARGET TROOP" :
-            card.Definition.Target == TargetKind.Enemy ? "TARGET ENEMY" : "TARGET TILE";
-        if (card.Definition.Exhaust) footer = "EXHAUST";
-        Tag(footer, x + 13, y + rect.Size.Y - 13, selected ? Paper : category);
+        Emblem footer = selected && _run.Battle?.Phase == Phase.Discard ? Emblem.Discard : card.Definition.Exhaust ? Emblem.Exhaust :
+            card.Definition.Target switch
+            { TargetKind.None => Emblem.Action, TargetKind.Deployment or TargetKind.Troop => Emblem.Troop, TargetKind.Enemy => Emblem.Mark, _ => Emblem.Board };
+        DrawEmblem(footer, new Rect2(x + 10, y + rect.Size.Y - 29, 24, 24), selected ? Paper : category);
         if (key > 0) Tag($"[{key}]", x + width - 33, y + rect.Size.Y - 13);
     }
 
     private void DrawCombatFooter(Combat battle)
     {
-        Button("draw-pile", $"DRAW {battle.DrawPile.Count:00}", new Rect2(36, 855, 111, 31), () => OpenDeck("DRAW"));
-        Button("discard-pile", $"DISCARD {battle.DiscardPile.Count:00}", new Rect2(157, 855, 121, 31), () => OpenDeck("DISCARD"));
-        Button("lost-pile", $"LOST {battle.Zones.Count(z => z.Value == Zone.Unavailable):00}", new Rect2(288, 855, 100, 31), () => OpenDeck("LOST"));
-        Button("exhausted-pile", $"EXHAUST {battle.Zones.Count(z => z.Value == Zone.Exhausted):00}", new Rect2(398, 855, 124, 31), () => OpenDeck("EXHAUSTED"));
-        Text($"Hand {battle.Hand.Count}/9", 545, 877, 15, Muted);
-        Button("combat-log", "LOG", new Rect2(672, 855, 68, 31), () => OpenModal("log"));
+        IconButton("draw-pile", Emblem.Deck, "Draw pile", new Rect2(36, 851, 88, 37), () => OpenDeck("DRAW"), count: $"{battle.DrawPile.Count:00}");
+        IconButton("discard-pile", Emblem.Discard, "Discard pile", new Rect2(142, 851, 88, 37), () => OpenDeck("DISCARD"), count: $"{battle.DiscardPile.Count:00}");
+        IconButton("lost-pile", Emblem.Lost, "Defeated troops", new Rect2(248, 851, 88, 37), () => OpenDeck("LOST"), count: $"{battle.Zones.Count(z => z.Value == Zone.Unavailable):00}");
+        IconButton("exhausted-pile", Emblem.Exhaust, "Exhausted cards", new Rect2(354, 851, 88, 37), () => OpenDeck("EXHAUSTED"), count: $"{battle.Zones.Count(z => z.Value == Zone.Exhausted):00}");
+        IconButton("hand-info", Emblem.Deck, "Cards held / maximum hand size", new Rect2(476, 851, 100, 37), () => OpenDeck("RUN"), count: $"{battle.Hand.Count}/9");
+        IconButton("combat-log", Emblem.Guide, "Combat log", new Rect2(614, 851, 42, 37), () => OpenModal("log"));
         string label = battle.Phase switch
         {
-            Phase.Cards => "COMMIT CARDS / ISSUE ORDERS  >",
-            Phase.Movement => "HOLD REMAINING / ATTACK  >",
-            Phase.Discard => $"DISCARD {_discards.Count}/{battle.RequiredDiscards} / ENEMY TURN  >",
+            Phase.Cards => "ISSUE ORDERS  >",
+            Phase.Movement => "HOLD & ATTACK  >",
+            Phase.Discard => $"DISCARD {_discards.Count}/{battle.RequiredDiscards}  >",
             Phase.Victory => "CLAIM SECTOR  >",
-            _ => "VIEW FINAL REPORT  >"
+            _ => "FINAL REPORT  >"
         };
         Button("phase", label, new Rect2(1062, 850, 342, 39), AdvancePhase,
             battle.Phase != Phase.Discard || _discards.Count == battle.RequiredDiscards, true);
@@ -598,20 +624,21 @@ public partial class GameView : Control
             bool combo = impact.Combos.Length > 0;
             if (combo)
             {
-                if (!_reduced)
+                if (!_reduced && _effectIntensity > 0)
                 {
-                    DrawLine(from, to, new GColour(Cyan, alpha * .1f), 14, true);
-                    DrawLine(from, to, new GColour(Cyan, alpha * .7f), 2, true);
-                    DrawArc(to, 18 + age * 33, 0, Mathf.Tau, 48, new GColour(Amber, alpha * .65f), 2, true);
+                    float effectAlpha = alpha * _effectIntensity;
+                    DrawLine(from, to, new GColour(Cyan, effectAlpha * .1f), 14, true);
+                    DrawLine(from, to, new GColour(Cyan, effectAlpha * .7f), 2, true);
+                    DrawArc(to, 18 + age * 33, 0, Mathf.Tau, 48, new GColour(Amber, effectAlpha * .65f), 2, true);
                     for (int i = 0; i < 9; i++)
                     {
                         float angle = i * Mathf.Tau / 9;
                         Vector2 direction = new(Mathf.Cos(angle), Mathf.Sin(angle));
                         DrawLine(to + direction * (20 + age * 34), to + direction * (25 + age * 42),
-                            new GColour(i % 2 == 0 ? Cyan : Amber, alpha), 2, true);
+                            new GColour(i % 2 == 0 ? Cyan : Amber, effectAlpha), 2, true);
                     }
                 }
-                else Outline(Diamond(impact.To, 3), new GColour(Cyan, alpha), 2);
+                else if (_effectIntensity > 0) Outline(Diamond(impact.To, 3), new GColour(Cyan, alpha * _effectIntensity), 2);
             }
             Text($"-{impact.Damage}", to.X + 14, to.Y - 20 - (_reduced ? 0 : age * 13), combo ? 27 : 17,
                 new GColour(combo ? Amber : Paper, alpha), _bold);
@@ -663,7 +690,7 @@ public partial class GameView : Control
         Tag(victory ? "CENTRAL COMMAND / CITY LIBERATED" : "TRANSMISSION ENDED / ORGANISATION LOST", 76, 208);
         Text(victory ? "THE SILENCE" : "NO SIGNAL.", 70, 300, 76, Paper, _bold);
         if (victory) Text("BREAKS.", 70, 379, 76, Paper, _bold);
-        Paragraph(victory ? "The Warden is down. For one night, the district belongs to its people.\nThe resistance survives." :
+        Paragraph(victory ? "The Architect is down. For one night, the city belongs to its people.\nThe resistance survives." :
             "The city folds back into its routine.\nYour combinations were not enough. This time.", 76, 446, 644, 23, Muted);
         Rule(76, 548, 635);
         Text($"{_run.TotalCombos:00}", 76, 607, 43, Paper, _mono);
@@ -672,8 +699,10 @@ public partial class GameView : Control
         Tag("SECTORS SECURED", 287, 632);
         Text($"{_run.Hp:00}", 531, 607, 43, Paper, _mono);
         Tag(victory ? "ORGANISATION SURVIVED" : "ORGANISATION HP", 531, 632);
-        Button("new-run", "ESTABLISH A NEW SIGNAL  >", new Rect2(76, 712, 444, 54), Restart, primary: true);
-        Tag("TWO ACTS + CENTRAL FINALE / FUTURE DISTRICTS WILL EXPAND THE CITY", 76, 844);
+        Text($"+{_earnedXp} XP / {Unlocks.Names[_profile.Tier]} / {_profile.Experience} total", 76, 682, 20, Territory);
+        Button("new-run", "ESTABLISH A NEW SIGNAL  >", new Rect2(76, 730, 444, 48), () => { if (SettleRun()) BeginRun(); }, primary: true);
+        Button("end-unlocks", "VIEW UNLOCKS", new Rect2(534, 730, 206, 48), () => OpenModal("unlocks"));
+        Tag("FIVE DISTRICTS / FOUR OPEN THE CENTRE / THE FIFTH IS OPTIONAL", 76, 844);
     }
 
     private void DrawGuide()
@@ -697,7 +726,7 @@ public partial class GameView : Control
 
         Tag("DISRUPT THE SYSTEM", 937, 247);
         Paragraph("Enemy movement commits at round start. Recon reveals power and destinations; proximity within 2 Manhattan cells also reveals intent.\n\nJam support units, break shield formations and deny reinforcement tiles.", 937, 281, 365, 16, Paper, 9);
-        Paragraph("Carry 3 supplies. Use one free per round during card play; logistics can grant more. Relics last this run.\n\nF5 saves to this run's slot. Load restarts the current room. Defeat deletes the slot. Save manually before leaving.", 937, 493, 365, 15, Muted, 8);
+        Paragraph("Carry 3 supplies. Use one free per round during card play. Relics last this run.\n\nRooms autosave. Save & exit returns to the room entrance on load. Three runs can coexist. Defeat ends only that run; earned XP unlocks future card packs.", 937, 493, 365, 15, Muted, 8);
         Rule(110, 686, 1220);
         Tag("[1-9] CARDS  [SPACE] ADVANCE  [ESC / RIGHT CLICK] CANCEL  [TAB / ENTER] KEYBOARD SELECT", 110, 714);
         Button("guide-haze", _haze ? "THREAT HAZE ON" : "THREAT HAZE OFF", new Rect2(110, 744, 210, 38), ToggleHaze);
@@ -744,14 +773,13 @@ public partial class GameView : Control
 
     private void DrawRestart()
     {
-        Box(new Rect2(424, 284, 592, 291), Ink, Muted);
-        Tag("CONFIRM / ABANDON RUN", 455, 326);
-        Text("Break this connection?", 455, 373, 32, Paper, _bold);
-        Paragraph("Save manually to resume from this room's entrance.\nEach run owns one slot. Defeat deletes that slot.", 455, 418, 522, 17, Muted);
-        Button("menu-save", "SAVE RUN", new Rect2(455, 456, 155, 32), SaveRun);
-        Button("menu-load", "LOAD RUN", new Rect2(623, 456, 155, 32), OpenSaves);
-        Button("cancel-restart", "KEEP PLAYING", new Rect2(455, 502, 250, 43), () => _modal = "", primary: true);
-        Button("confirm-restart", "RETURN TO TITLE", new Rect2(721, 502, 263, 43), () => { Restart(); _title = true; });
+        Box(new Rect2(424, 238, 592, 412), Ink, Muted);
+        Text("Signal held.", 455, 291, 32, Paper, _bold);
+        Paragraph("Progress is checkpointed at room entry. Resuming a room restarts its encounter.", 455, 334, 522, 18, Muted, 2);
+        Button("cancel-restart", "RESUME", new Rect2(455, 399, 529, 42), () => _modal = "", primary: true);
+        Button("menu-options", "OPTIONS", new Rect2(455, 454, 529, 42), () => OpenModal("options"));
+        Button("confirm-restart", "SAVE & MAIN MENU", new Rect2(455, 509, 529, 42), () => SaveAndExit(false));
+        Button("menu-quit", "SAVE & QUIT", new Rect2(455, 564, 529, 42), () => SaveAndExit(true));
     }
 
     private void DrawLog()
@@ -920,7 +948,10 @@ public partial class GameView : Control
 
     private void Restart()
     {
-        _run = new RunState(NewSeed());
+        _run = new RunState(NewSeed(), _profile.Tier);
+        _checkpointStamp = "";
+        _settlementAttempt = null;
+        _earnedXp = 0;
         _title = false;
         _modal = "";
         _message = "";
@@ -941,19 +972,21 @@ public partial class GameView : Control
 
     public override void _GuiInput(InputEvent @event)
     {
+        if (HandleRouteInput(@event)) { AcceptEvent(); QueueRedraw(); return; }
         if (@event is not InputEventMouseButton { Pressed: true } mouse) return;
         if (mouse.ButtonIndex == MouseButton.Right) { Cancel(); AcceptEvent(); return; }
         if (mouse.ButtonIndex != MouseButton.Left) return;
         _keyboardFocus = false;
         var point = (mouse.Position - _origin) / _scale;
         var hit = _hotspots.LastOrDefault(h => h.Enabled && h.Contains(point));
-        if (hit is not null) { _focus = hit.Id; hit.Click(); AcceptEvent(); QueueRedraw(); }
+        if (hit is not null) { _focus = hit.Id; PlayInterfaceSound(); hit.Click(); AcceptEvent(); QueueRedraw(); }
     }
 
     public override void _Input(InputEvent @event)
     {
         if (@event is not InputEventKey { Pressed: true, Echo: false } key) return;
         if (key.Keycode == Key.Escape) { Cancel(); GetViewport().SetInputAsHandled(); return; }
+        if (HandleRouteKey(key.Keycode)) { GetViewport().SetInputAsHandled(); QueueRedraw(); return; }
         if (key.Keycode == Key.Tab)
         {
             var enabled = _hotspots.Where(h => h.Enabled).ToArray();
@@ -963,14 +996,17 @@ public partial class GameView : Control
                 index = (index + (key.ShiftPressed ? -1 : 1) + enabled.Length) % enabled.Length;
                 _focus = enabled[index].Id;
                 _keyboardFocus = true;
+                EnsureRouteFocusVisible();
             }
         }
         else if (key.Keycode == Key.Enter || key.Keycode == Key.KpEnter)
-            _hotspots.FirstOrDefault(h => h.Enabled && h.Id == _focus)?.Click();
+        {
+            var hit = _hotspots.FirstOrDefault(h => h.Enabled && h.Id == _focus);
+            if (hit is not null) { PlayInterfaceSound(); hit.Click(); }
+        }
         else if (key.Keycode == Key.M) ToggleMute();
         else if (key.Keycode == Key.R) ToggleMotion();
         else if (key.Keycode == Key.H) OpenModal("guide");
-        else if (key.Keycode == Key.F5) SaveRun();
         else if (_modal.Length == 0 && _lock <= 0)
         {
             if (key.Keycode == Key.Space) AdvancePhase();
@@ -983,7 +1019,10 @@ public partial class GameView : Control
 
     private void Cancel()
     {
+        if (_modal == "options") { _modal = _title ? "" : "restart"; return; }
         if (_modal.Length > 0) { _modal = ""; return; }
+        if (!_title && !_selectedCard.HasValue && !_selectedTroop.HasValue && !_selectedEnemy.HasValue && !_selectedSupply.HasValue && _discards.Count == 0)
+        { OpenModal("restart"); return; }
         _selectedCard = null;
         _selectedTroop = null;
         _selectedEnemy = null;
@@ -992,18 +1031,21 @@ public partial class GameView : Control
         _message = "";
     }
 
-    private void ToggleMute() { _muted = !_muted; if (_muted) _audio.Stop(); SaveSettings(); }
+    private void ToggleMute() { _muted = !_muted; if (_muted) _audio.Stop(); SaveSettings(); ApplyAudio(); }
     private void ToggleMotion() { _reduced = !_reduced; SaveSettings(); }
     private void ToggleHaze() { _haze = !_haze; SaveSettings(); }
     private void LoadSettings()
     {
         var config = new ConfigFile();
-        var error = config.Load("user://settings.cfg");
+        var error = config.Load(_settingsPath);
         if (error == Error.FileNotFound) return;
         if (error != Error.Ok) { GD.PushError($"Cannot load settings: {error}"); _message = "Settings could not be loaded."; return; }
         _muted = config.GetValue("accessibility", "muted", false).AsBool();
         _reduced = config.GetValue("accessibility", "reduced_motion", false).AsBool();
         _haze = config.GetValue("accessibility", "threat_haze", true).AsBool();
+        try { ReadOptions(config); }
+        catch (System.IO.InvalidDataException exception)
+        { GD.PushError(exception.Message); Act(CommandResult.Reject("Invalid options: " + exception.Message)); }
     }
 
     private void SaveSettings()
@@ -1012,7 +1054,8 @@ public partial class GameView : Control
         config.SetValue("accessibility", "muted", _muted);
         config.SetValue("accessibility", "reduced_motion", _reduced);
         config.SetValue("accessibility", "threat_haze", _haze);
-        var error = config.Save("user://settings.cfg");
+        WriteOptions(config);
+        var error = config.Save(_settingsPath);
         if (error != Error.Ok) { GD.PushError($"Cannot save settings: {error}"); Act(CommandResult.Reject("Settings could not be saved.")); }
     }
 
@@ -1039,9 +1082,9 @@ public partial class GameView : Control
         _reduced = _smokeScreen == "reduced";
         _haze = true;
         int chosenSeed = 1;
-        for (int seed = 1; seed <= 100; seed++)
+        for (int seed = 1; UsesComboFixture && seed <= 100; seed++)
         {
-            var candidate = new RunState(seed);
+            var candidate = CreateSmokeRun(seed);
             candidate.StartAct(1);
             candidate.Enter("entry");
             string first = _smokeScreen == "action" ? "mark" : "marksman";
@@ -1050,12 +1093,7 @@ public partial class GameView : Control
                 candidate.Battle.Hand.Any(id => candidate.Battle.GetCard(id).Definition.Id == second))
             { chosenSeed = seed; break; }
         }
-        _run = new RunState(chosenSeed);
-        if (_smokeScreen == "saves")
-        {
-            _smokeSaveDirectory = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "FutureDark-native-" + Guid.NewGuid().ToString("N"));
-            _saves = new RunSaveStore(_smokeSaveDirectory);
-        }
+        _run = CreateSmokeRun(chosenSeed);
         _nextSmokeStep = .5f;
         void Step(Action action, float delay = .32f, bool duringLock = false) => _smokeSteps.Enqueue((action, delay, duringLock));
         bool keyboard = _smokeScreen == "keyboard";
@@ -1064,15 +1102,74 @@ public partial class GameView : Control
             if (keyboard) { Step(() => SmokeFocus(id)); Step(() => SmokeKey(Key.Enter), delay); }
             else Step(() => SmokeClick(id), delay);
         }
-        if (_smokeScreen == "title") { Step(FinishVisualSmoke); return; }
+        if (_smokeScreen is "title" or "icons") { Step(FinishVisualSmoke); return; }
+        if (_smokeScreen is "options" or "unlocks")
+        {
+            Activate(_smokeScreen == "options" ? "title-options" : "title-unlocks");
+            if (_smokeScreen == "options")
+            {
+                Activate("option-master-up");
+                Activate("option-fast");
+                Activate("option-text");
+                for (int i = 0; i < 4; i++) Activate("option-ui");
+                Activate("option-display", .6f);
+                Step(() => SmokeCheck(GetWindow().Borderless && GetWindow().Size == DisplayServer.ScreenGetSize(GetWindow().CurrentScreen),
+                    "Borderless mode must cover the current desktop."));
+                Activate("option-display", .6f);
+                Step(() => SmokeCheck(GetWindow().Mode == Window.ModeEnum.Fullscreen, "Fullscreen must change the native window mode."));
+                Activate("option-display", .6f);
+                for (int i = 0; i < 3; i++) Activate("option-resolution", .6f);
+                Step(() => SmokeCheck(GetWindow().Mode == Window.ModeEnum.Windowed && GetWindow().Size == new Vector2I(1280, 800),
+                    "Windowed resolution must resize the native window."));
+                Activate("option-resolution", .6f);
+                Step(() =>
+                {
+                    _masterVolume = 0;
+                    LoadSettings();
+                    ApplyAudio();
+                    SmokeCheck(Math.Abs(_masterVolume - .6f) < .001f && _fastAnimations && _textScale > 1.05f && Math.Abs(_uiScale - 1) < .001f,
+                        "Options must persist independently from runs.");
+                    _muted = false;
+                    GetWindow().EmitSignal(Window.SignalName.FocusEntered);
+                    SmokeCheck(_ambientAudio.Playing && Math.Abs(_audio.VolumeDb - Mathf.LinearToDb(.15f)) < .01f,
+                        "Master and combat sliders must control the audio player.");
+                    GetWindow().EmitSignal(Window.SignalName.FocusExited);
+                    SmokeCheck(!_ambientAudio.Playing && _audio.VolumeDb == -80 && _interfaceAudio.VolumeDb == -80,
+                        "Focus loss must mute all channels.");
+                    GetWindow().EmitSignal(Window.SignalName.FocusEntered);
+                    SmokeCheck(_ambientAudio.Playing, "Focus return must restore ambience.");
+                    _muted = true;
+                    ApplyAudio();
+                });
+            }
+            Step(FinishVisualSmoke);
+            return;
+        }
         Activate("begin");
+        if (_smokeScreen == "terrain")
+        {
+            Step(() =>
+            {
+                var snapshot = _run.SnapshotForSave();
+                var node = RunState.GenerateAct(_run.Seed, 5).First(n => n.Kind == RoomKind.Battle && n.Column >= 4);
+                _run = RunState.Restore(snapshot with { Act = 5, Screen = RunScreen.Map, Available = [node.Id],
+                    Current = null, Completed = [], CompletedActs = [1, 2, 3, 4], ReplayNode = node.Id });
+                _smokeCover = _run.Battle!.Board.Cover.Keys.First();
+                while (!_run.Battle.Hand.Any(id => _run.Battle.GetCard(id).Definition.Id == "pulse"))
+                    _run.Battle.DrawCards(1);
+            }, .6f);
+            Step(() => SmokeClick("card-" + _run.Battle!.Hand.First(id => _run.Battle.GetCard(id).Definition.Id == "pulse")));
+            Step(() => SmokeClick("cover-" + _smokeCover));
+            Step(FinishVisualSmoke);
+            return;
+        }
         if (_smokeScreen == "city") { Step(FinishVisualSmoke); return; }
         if (_smokeScreen == "liberated")
         {
             Step(() =>
             {
                 _run.StartAct(1);
-                _run = RunState.Restore(_run.SnapshotForSave() with { Act = 2, Screen = RunScreen.City, CompletedActs = [1, 2] });
+                _run = RunState.Restore(_run.SnapshotForSave() with { Act = 4, Screen = RunScreen.City, CompletedActs = [1, 2, 3, 4] });
             });
             Step(FinishVisualSmoke);
             return;
@@ -1098,6 +1195,52 @@ public partial class GameView : Control
         }
         Activate("district-1");
         if (_smokeScreen == "map") { Step(FinishVisualSmoke); return; }
+        if (_smokeScreen == "mapscroll")
+        {
+            Step(() => SmokeRouteWheel());
+            Step(() =>
+            {
+                SmokeCheck(_routeScroll >= 180, "Mouse wheel did not scroll the route.");
+                SmokeRouteDrag();
+            });
+            Step(() =>
+            {
+                SmokeCheck(_routeScroll >= 450 && _modal.Length == 0, "Dragging must pan without opening an encounter.");
+                SmokeRouteDrag(new Vector2(850, 748), new Vector2(600, 748));
+            });
+            Step(() =>
+            {
+                SmokeCheck(_routeScroll < 450, "Dragging the scrollbar must pan the route.");
+                SmokeKey(Key.Home);
+            });
+            Step(() =>
+            {
+                SmokeCheck(_routeScroll == 0, "Home did not reveal the entry.");
+                SmokeFocus("node-" + _run.Nodes.Last().Id);
+            });
+            Step(() =>
+            {
+                SmokeCheck(_routeScroll > 0 && RouteViewport.HasPoint(_hotspots.Single(h => h.Id == _focus).Rect.GetCenter()),
+                    "Keyboard focus must reveal off-screen rooms.");
+                SmokeKey(Key.Enter);
+            });
+            Step(() =>
+            {
+                SmokeCheck(_modal == "room" && _roomDialog == _run.Nodes.Last().Id &&
+                    _hotspots.Any(h => h.Id == "room-enter" && !h.Enabled), "Inspecting a distant boss must not allow skipping the route.");
+                SmokeKey(Key.Escape);
+            });
+            Step(() => SmokeKey(Key.Home));
+            Activate("node-entry");
+            Step(() =>
+            {
+                SmokeCheck(_modal == "room" && _roomDialog == "entry", "Pointer hitboxes must follow the scrolled map.");
+                SmokeKey(Key.Escape);
+            });
+            Step(() => SmokeKey(Key.End));
+            Step(FinishVisualSmoke);
+            return;
+        }
         if (_smokeScreen == "deck")
         {
             Activate("map-deck");
@@ -1106,18 +1249,32 @@ public partial class GameView : Control
         }
         Activate("node-entry");
         Activate("room-enter", .65f);
+        if (_smokeScreen == "end")
+        {
+            Step(() =>
+            {
+                var battle = _run.Battle!;
+                for (int turn = 0; turn < 50 && battle.Phase != Phase.Defeat; turn++)
+                {
+                    battle.BeginMovement();
+                    battle.ResolveTroops();
+                    if (battle.Phase == Phase.Discard) battle.ConfirmDiscard(battle.Hand.Take(battle.RequiredDiscards));
+                }
+                _run.FinishBattle();
+            });
+            Step(FinishVisualSmoke);
+            return;
+        }
         if (_smokeScreen == "saves")
         {
-            Activate("save");
             Activate("supply-0");
-            Step(() => SmokeKey(Key.F5));
             Activate("restart");
-            Activate("menu-load");
-            Step(() => SmokeClick("load-" + _run.RunId));
+            Activate("confirm-restart");
+            Activate("title-load");
             Step(() =>
             {
                 if (!SmokeCheck(_run.Battle?.Round == 1 && _run.Supplies.Count == 1 && _saves.List().Count == 1,
-                    "Native manual save/load did not restore the room entrance to a single slot.")) return;
+                    "Native autosave/continue did not restore the room entrance to a single slot.")) return;
                 var battle = _run.Battle!;
                 for (int i = 0; i < 50 && battle.Phase != Phase.Defeat; i++)
                 {
@@ -1126,6 +1283,13 @@ public partial class GameView : Control
                     battle.ConfirmDiscard(battle.Hand.Take(battle.RequiredDiscards).ToArray());
                 }
             });
+            Step(FinishVisualSmoke);
+            return;
+        }
+        if (_smokeScreen == "pause-options")
+        {
+            Activate("restart");
+            Activate("menu-options");
             Step(FinishVisualSmoke);
             return;
         }
@@ -1221,6 +1385,29 @@ public partial class GameView : Control
         Input.ParseInputEvent(new InputEventKey { Keycode = key, Pressed = false });
     }
 
+    private Vector2 SmokePointerPosition(Vector2 logical)
+        => GetViewport().GetScreenTransform() * GetGlobalTransformWithCanvas() * (_origin + logical * _scale);
+
+    private void SmokeRouteWheel()
+    {
+        Vector2 point = SmokePointerPosition(RouteViewport.GetCenter());
+        Input.ParseInputEvent(new InputEventMouseButton
+        { ButtonIndex = MouseButton.WheelDown, Pressed = true, Position = point, GlobalPosition = point });
+        Input.ParseInputEvent(new InputEventMouseButton
+        { ButtonIndex = MouseButton.WheelDown, Pressed = false, Position = point, GlobalPosition = point });
+    }
+
+    private void SmokeRouteDrag(Vector2? from = null, Vector2? to = null)
+    {
+        Vector2 start = SmokePointerPosition(from ?? new Vector2(1000, 685)), end = SmokePointerPosition(to ?? new Vector2(700, 685));
+        Input.ParseInputEvent(new InputEventMouseButton
+        { ButtonIndex = MouseButton.Left, Pressed = true, Position = start, GlobalPosition = start });
+        Input.ParseInputEvent(new InputEventMouseMotion
+        { Position = end, GlobalPosition = end, Relative = end - start, ButtonMask = MouseButtonMask.Left });
+        Input.ParseInputEvent(new InputEventMouseButton
+        { ButtonIndex = MouseButton.Left, Pressed = false, Position = end, GlobalPosition = end });
+    }
+
     private void SmokeFocus(string id)
     {
         var controls = _hotspots.Where(h => h.Enabled).ToArray();
@@ -1236,9 +1423,17 @@ public partial class GameView : Control
         bool valid = _smokeScreen switch
         {
             "title" => _title,
+            "icons" => _title && _emblems.Count == Enum.GetValues<Emblem>().Length,
+            "options" => _title && _modal == "options" && _fastAnimations,
+            "pause-options" => !_title && _modal == "options",
+            "unlocks" => _modal == "unlocks",
+            "terrain" => _run.Battle is { } terrain && terrain.Board.Width == 9 && terrain.Board.Ramps.Count > 0 &&
+                _smokeCover.HasValue && terrain.Board.Cover[_smokeCover.Value] == 5,
+            "end" => _run.Screen == RunScreen.Defeat && _earnedXp == 80 && _profile.Tier == 1,
             "city" => !_title && _run.Screen == RunScreen.City,
             "liberated" => _run.Screen == RunScreen.City && _run.CentreUnlocked,
             "map" => !_title && _run.Screen == RunScreen.Map,
+            "mapscroll" => !_title && _run.Screen == RunScreen.Map && _modal.Length == 0 && _routeScroll > 0,
             "guide" => _modal == "guide",
             "deck" => _modal == "deck",
             "dense" => _run.Battle?.Hand.Count == 9,

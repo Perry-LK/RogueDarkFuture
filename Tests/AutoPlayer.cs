@@ -68,6 +68,7 @@ internal static class AutoPlayer
             foreach (var target in targets)
             {
                 var troop = battle.Troops.FirstOrDefault(t => t.Cell == target);
+                var targetEnemy = battle.Enemies.FirstOrDefault(e => e.Cell == target);
                 int uncovered = Math.Max(0, battle.RawThreat - battle.OrganisationBlock);
                 float score = card.Definition.Effect switch
                 {
@@ -80,7 +81,7 @@ internal static class AutoPlayer
                     EffectKind.Exposed => !battle.Tiles.Any(t => t.Kind == TileKind.Exposed && t.Cell == target) &&
                         PotentialTargets(battle).Any(e => e.Cell == target) ? 14 + (battle.StrikeBonus > 0 ? 12 : 0) : -1,
                     EffectKind.March => !troop!.Marched && troop.Kind == PieceKind.Runner ? 22 : -1,
-                    EffectKind.Pulse or EffectKind.Execute or EffectKind.Siege or EffectKind.Purge => 30 + (battle.Enemies.First(e => e.Cell == target).Hp < 10 ? 20 : 0),
+                    EffectKind.Pulse or EffectKind.Execute or EffectKind.Siege or EffectKind.Purge => targetEnemy is null ? 2 : 30 + (targetEnemy.Hp < 10 ? 20 : 0),
                     EffectKind.Mark => battle.Enemies.First(e => e.Cell == target).Mark == 0 ? 80 : -1,
                     EffectKind.Corrode => 36,
                     EffectKind.Detonate => 23 + battle.Enemies.First(e => e.Cell == target).Corrosion * 7,
@@ -122,11 +123,19 @@ internal static class AutoPlayer
 
     private static List<Cell> BestPath(Combat battle, Troop troop)
     {
+        var distances = new Dictionary<Cell, int>();
+        var queue = new Queue<Cell>();
+        foreach (var cell in battle.Board.Cells.Where(c => battle.Board.Accessible(c) &&
+            battle.Enemies.Any(e => battle.AttackCells(troop.Kind, c).Contains(e.Cell))))
+        { distances[cell] = 0; queue.Enqueue(cell); }
+        while (queue.TryDequeue(out var cell))
+            foreach (var next in Neighbours(battle, troop, cell))
+                if (distances.TryAdd(next, distances[cell] + 1)) queue.Enqueue(next);
         var best = new List<Cell>();
-        float bestScore = PositionScore(battle, troop, troop.Cell, troop.MovesMade);
+        float bestScore = PositionScore(battle, troop, troop.Cell, troop.MovesMade) - distances.GetValueOrDefault(troop.Cell, 20) * 5;
         void Visit(Cell position, List<Cell> path, int remaining)
         {
-            float score = PositionScore(battle, troop, position, troop.MovesMade + path.Count) - path.Count * .015f;
+            float score = PositionScore(battle, troop, position, troop.MovesMade + path.Count) - path.Count * .015f - distances.GetValueOrDefault(position, 20) * 5;
             if (score > bestScore) { bestScore = score; best = path.ToList(); }
             if (remaining == 0) return;
             foreach (var next in Neighbours(battle, troop, position))
@@ -145,7 +154,7 @@ internal static class AutoPlayer
         int dx = Math.Abs(cell.X - from.X), dy = Math.Abs(cell.Y - from.Y);
         bool matches = troop.Kind switch { PieceKind.Breacher => dx * dy == 2, PieceKind.Sapper => dx == 1 && dy == 1,
             PieceKind.Medic => Math.Max(dx, dy) == 1, _ => dx + dy == 1 };
-        return matches && !battle.IsDenied(cell) && !battle.Enemies.Any(e => e.Cell == cell) &&
+        return matches && battle.Board.CanTraverse(from, cell, troop.Kind == PieceKind.Breacher) && !battle.IsDenied(cell) && !battle.Enemies.Any(e => e.Cell == cell) &&
             !battle.Troops.Any(t => t != troop && t.Cell == cell);
     });
 
@@ -168,6 +177,7 @@ internal static class AutoPlayer
         });
         score -= distance * 2.5f;
         if (battle.Tiles.Any(t => t.Cell == cell && t.Kind == TileKind.EnemyHazard)) score -= 25;
+        if (battle.Board.Hazards.ContainsKey(cell)) score -= 16;
         int incoming = battle.Enemies.Where(e => e.Step.Kind == EnemyActionKind.Attack &&
             battle.EnemyAttackCells(e).Contains(cell)).Sum(e => e.Step.Power);
         if (incoming >= troop.Hp + troop.Block) score -= 12;

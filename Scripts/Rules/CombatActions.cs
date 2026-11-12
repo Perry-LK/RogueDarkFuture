@@ -30,7 +30,10 @@ public sealed partial class Combat
 
     private void TroopAttack(Troop troop, int bonus = 0)
     {
-        foreach (var enemy in _enemies.Where(e => AttackCells(troop.Kind, troop.Cell).Contains(e.Cell)).ToArray())
+        var cells = AttackCells(troop.Kind, troop.Cell);
+        foreach (var cover in Board.Cover.Keys.Where(cells.Contains).ToArray())
+            HitCover(cover, troop.Damage + StrikeBonus + bonus + HeightBonus(troop.Cell, cover, troop.Kind is PieceKind.Marksman or PieceKind.Sapper));
+        foreach (var enemy in _enemies.Where(e => cells.Contains(e.Cell)).ToArray())
         {
             var hit = PreviewAttack(troop, enemy);
             HitEnemy(enemy, hit.Damage + bonus, troop.Cell, hit.Combos, markIncluded: true);
@@ -52,7 +55,10 @@ public sealed partial class Combat
         Cell origin = _troops.FirstOrDefault()?.Cell ?? new Cell(3, 5);
         switch (card.Definition.Effect)
         {
-            case EffectKind.Pulse: HitEnemy(enemy!, p, origin); break;
+            case EffectKind.Pulse:
+                if (Board.Cover.ContainsKey(target!.Value)) HitCover(target.Value, p);
+                else HitEnemy(enemy!, p, origin);
+                break;
             case EffectKind.Mark: enemy!.Mark += p; break;
             case EffectKind.Jam: enemy!.Jammed = Math.Max(enemy.Jammed, p); break;
             case EffectKind.Corrode: enemy!.Corrosion += p + (HasRelic("catalyst") ? 1 : 0); break;
@@ -65,7 +71,7 @@ public sealed partial class Combat
             case EffectKind.Pull:
                 HitEnemy(enemy!, p, origin);
                 var to = enemy!.Cell with { Y = enemy.Cell.Y + (card.Definition.Effect == EffectKind.Push ? -1 : 1) };
-                if (_enemies.Contains(enemy) && CanEnter(to))
+                if (_enemies.Contains(enemy) && CanEnter(to) && Board.CanTraverse(enemy.Cell, to))
                 {
                     enemy.Cell = to;
                     TriggerEnemyTile(enemy);
@@ -174,6 +180,7 @@ public sealed partial class Combat
 
     private void TriggerEnemyTile(Enemy enemy)
     {
+        if (Board.Hazards.TryGetValue(enemy.Cell, out int power)) HitEnemy(enemy, power, enemy.Cell, direct: false);
         foreach (var tile in _tiles.Where(t => t.Cell == enemy.Cell).ToArray())
         {
             if (!_enemies.Contains(enemy)) break;
@@ -204,6 +211,8 @@ public sealed partial class Combat
 
     private void TriggerFriendlyTile(Troop troop)
     {
+        if (Board.Hazards.TryGetValue(troop.Cell, out int power)) HitTroop(troop, power, troop.Cell);
+        if (!_troops.Contains(troop)) return;
         var hazard = _tiles.FirstOrDefault(t => t.Cell == troop.Cell && t.Kind == TileKind.EnemyHazard);
         if (hazard is null) return;
         troop.RootedRounds = 1;

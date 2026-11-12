@@ -5,7 +5,9 @@ namespace FutureDark.Rules;
 public sealed record SavedCard(int Id, string DefinitionId, bool Upgraded);
 public sealed record RunSnapshot
 {
-    public int Version { get; init; } = 1;
+    public int Version { get; init; } = 2;
+    public int UnlockTier { get; init; }
+    public string[] StoryFlags { get; init; } = [];
     public string RunId { get; init; } = "";
     public int Seed { get; init; }
     public int Act { get; init; }
@@ -27,7 +29,9 @@ public sealed record RunSnapshot
 
     public void Validate()
     {
-        if (Version != 1 || !Guid.TryParseExact(RunId, "N", out _) || Act is < 1 or > 3 ||
+        if (Version != 2 || !Guid.TryParseExact(RunId, "N", out _) || Act is < 1 or > RunState.FinaleAct ||
+            UnlockTier is < 0 or > 4 || StoryFlags is null || StoryFlags.Any(f => !RunState.KnownStoryFlags.Contains(f)) ||
+            StoryFlags.Distinct().Count() != StoryFlags.Length ||
             Hp is <= 0 or > RunState.MaxHp || Funds < 0 || Screen is not (RunScreen.Map or RunScreen.City) ||
             Cards is null || Cards.Length is < 8 or > 300 || Cards.Any(c => c is null || c.Id <= 0 ||
                 !Content.Cards.Any(d => d.Id == c.DefinitionId)) || Cards.Select(c => c.Id).Distinct().Count() != Cards.Length ||
@@ -62,20 +66,8 @@ public sealed class RunSaveStore(string directory)
         snapshot.Validate();
         Directory.CreateDirectory(directory);
         string path = PathFor(run.RunId);
-        string temporary = path + ".tmp";
-        try
-        {
-            using (var stream = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None))
-            {
-                JsonSerializer.Serialize(stream, snapshot, Options);
-                stream.Flush(true);
-            }
-            File.Move(temporary, path, true);
-        }
-        finally
-        {
-            if (File.Exists(temporary)) File.Delete(temporary);
-        }
+        if (!File.Exists(path) && List().Count >= 3) throw new InvalidOperationException("All three run slots are occupied. Abandon one before starting another.");
+        AtomicJson.Write(path, snapshot);
     }
 
     public RunState Load(string runId)
@@ -109,7 +101,7 @@ public sealed class RunSaveStore(string directory)
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or InvalidDataException)
             {
-                entries.Add(new SaveEntry(id, DateTime.MinValue, null, error.Message));
+                entries.Add(new SaveEntry(id, File.GetLastWriteTimeUtc(path), null, error.Message));
             }
         }
         return entries.OrderByDescending(e => e.Modified).ToArray();

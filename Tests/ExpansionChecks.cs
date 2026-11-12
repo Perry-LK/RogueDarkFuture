@@ -232,12 +232,14 @@ internal static class ExpansionChecks
         Ok(boundary.StartAct(1));
         var snapshot = boundary.SnapshotForSave();
         var one = RunState.Restore(snapshot with { Screen = RunScreen.City, CompletedActs = [1] });
-        Check(!one.CentreUnlocked && !one.StartAct(3).Ok, "One of two acts does not reach two-thirds.");
-        var two = RunState.Restore(snapshot with { Screen = RunScreen.City, CompletedActs = [1, 2] });
-        Check(two.CentreUnlocked, "Both acts must unlock the centre.");
-        Ok(two.StartAct(3));
+        Check(!one.CentreUnlocked && !one.StartAct(RunState.FinaleAct).Ok, "One district does not reach two-thirds.");
+        var three = RunState.Restore(snapshot with { Screen = RunScreen.City, CompletedActs = [1, 2, 3] });
+        Check(!three.CentreUnlocked, "Three of five is below two-thirds.");
+        var two = RunState.Restore(snapshot with { Screen = RunScreen.City, CompletedActs = [1, 2, 3, 4] });
+        Check(two.CentreUnlocked, "Four districts must unlock the centre.");
+        Ok(two.StartAct(RunState.FinaleAct));
         Ok(two.Enter("finale"));
-        Check(two.Battle!.Enemies.Any(e => e.Definition == Content.Architect), "Central finale must have its own boss encounter.");
+        Check(two.Battle!.Enemies.Any(e => e.Definition.Id == Content.Architect.Id), "Central finale must have its own boss encounter.");
     }
 
     public static void Saves()
@@ -286,11 +288,12 @@ internal static class ExpansionChecks
             int transitions = 0;
             while (run.Screen is not (RunScreen.Complete or RunScreen.Defeat))
             {
-                Check(++transitions <= 150, "Campaign must not get stuck on a room transition.");
+                Check(++transitions <= 220, "Campaign must not get stuck on a room transition.");
                 switch (run.Screen)
                 {
                     case RunScreen.City:
-                        Ok(run.StartAct(run.CentreUnlocked ? 3 : run.CompletedActs.Count + 1));
+                        Ok(run.StartAct(run.CentreUnlocked && seed % 2 == 0 || run.CompletedActs.Count == RunState.MainActCount
+                            ? RunState.FinaleAct : run.CompletedActs.Count + 1));
                         break;
                     case RunScreen.Map:
                         string next = run.Available.OrderBy(id => run.Nodes.Single(n => n.Id == id).Kind == RoomKind.Elite ? 1 : 0).First();
@@ -305,8 +308,9 @@ internal static class ExpansionChecks
                         Ok(run.ClaimReward(reward?.Id));
                         break;
                     case RunScreen.Event:
-                        var choice = run.EventChoices.FirstOrDefault(c => c.Id == "heal") ?? run.EventChoices.FirstOrDefault(c => c.Id == "upgrade")
-                            ?? run.EventChoices.FirstOrDefault(c => c.Id == "cash") ?? run.EventChoices.Last();
+                        var affordable = run.EventChoices.Where(c => c.Cost <= run.Funds).ToArray();
+                        var choice = affordable.FirstOrDefault(c => c.Id == "heal") ?? affordable.FirstOrDefault(c => c.Id == "upgrade" && run.Deck.Any(c => !c.Upgraded))
+                            ?? affordable.FirstOrDefault(c => c.Id == "cash") ?? affordable.Last();
                         Ok(run.ResolveEvent(choice.Id, choice.Id == "upgrade" ? run.Deck.First(c => !c.Upgraded).Id : null));
                         break;
                     case RunScreen.Vendor:
@@ -324,7 +328,7 @@ internal static class ExpansionChecks
             if (run.Screen == RunScreen.Complete)
             {
                 wins++;
-                Check(run.CompletedActs.Count == 2 && run.Act == 3, "Completion requires two acts and the central boss.");
+                Check(run.CompletedActs.Count >= 4 && run.Act == RunState.FinaleAct, "Completion requires at least four districts and the central boss.");
             }
         }
         Check(wins > 0, "At least one seeded full campaign must be completable by the fixed tactical policy.");

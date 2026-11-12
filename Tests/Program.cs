@@ -22,7 +22,7 @@ var tests = new (string Name, Action Test)[]
     ("temporary board effects last exactly their stated enemy phases", TileExpiry),
     ("organisation defeat stops later enemies immediately", ImmediateDefeat),
     ("branching routes, rewards, healing and upgrades are applied once", RunProgression),
-    ("long campaigns preserve both acts and reach a terminal outcome", CompleteRun),
+    ("long campaigns preserve districts and reach a terminal outcome", CompleteRun),
     ("enemy movement is committed, legal and interruptible without suppressing organisation damage", ExpansionChecks.CommittedMovement),
     ("commander forecasts and hazard displacement match their committed resolution", ExpansionChecks.CommandAndHazard),
     ("shield formation breaks on jam and precision depends on its spotter", ExpansionChecks.EnemyCombos),
@@ -31,6 +31,11 @@ var tests = new (string Name, Action Test)[]
     ("supply limits, amplification, recovery and exhaustion conserve resources", ExpansionChecks.Supplies),
     ("the whole expanded card pool has legal normal and upgraded resolutions", ExpansionChecks.CardPool),
     ("seeded routes, vendor purchases, relics and removal obey economic invariants", ExpansionChecks.Economy),
+    ("scrolling route trees have reachable branches without crossing or overlapping streets", RouteChecks.PlanarRoutes),
+    ("district terrain remains connected and cover blocks then opens troop fire", NewSystemsChecks.Terrain),
+    ("height and persistent hazards damage board units independently of organisation HP", NewSystemsChecks.HeightDamage),
+    ("XP unlocks are idempotent and three autosave slots preserve frozen reward pools", NewSystemsChecks.ProgressAndSlots),
+    ("linked narrative choices persist and change later district encounters", NewSystemsChecks.Narrative),
     ("manual saves use unique run identities and restore deterministic room-entry state", ExpansionChecks.Saves)
 };
 

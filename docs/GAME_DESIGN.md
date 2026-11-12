@@ -1,8 +1,36 @@
 # FutureDark: Game Design Document
 
-## Expanded prototype / accepted direction
+## Current campaign / accepted direction
 
-The current build supersedes the original short-slice scope:
+The working map/icon/UI preview was approved; the remaining systems below are now implemented. Multiplayer and the playable Security faction remain deferred.
+
+The interface retains:
+
+- A horizontally scrollable, non-crossing route graph, with variable-length angular street connections and reconvergence only at encounter nodes. Mouse wheel, map/scrollbar dragging and keyboard navigation are supported.
+- Textured illustrated dystopian emblems. Main HUD/actions favour icons and numbers; hover/focus explains them. Keep full card rules and important confirmations readable.
+
+The campaign adds:
+
+- Five main districts and a short central finale. Keep the two-thirds threshold: the centre unlocks after four districts, with the fifth optional.
+- District-specific generated battlefields, roughly 7x6 through 9x8. Start with similar small squads; later encounters prioritise tougher specialists rather than simply flooding the board, while gradually increasing numbers.
+- Raised streets, rooftops and walkways connected by ramps. Normal movement changes levels via ramps; leap pieces may jump one level. Ranged troop attacks gain +1 damage against lower targets. Organisation damage does not gain this bonus.
+- Solid walls block troop fire but do not change proximity intel. Add destructible cover and persistent environmental hazards. No falling damage: pushes and pulls must follow connected terrain/ramps. Explosive barrels and switch/lift systems are not included.
+- Linked narrative events with consequences in later encounters.
+- Ten-card Resistance starter: two Runners, three basic direct attacks, three organisation-block cards, one Recon and one Forced March. Future factions receive their own basic thematic decks.
+- XP from victories and defeats unlocks themed card packs for future runs, aiming to open the current collection within roughly 3-5 meaningful runs. Unlock options, not permanent stat boosts.
+- Up to three concurrent autosaved runs replace manual saves. Continue selects the most recently played run. Autosave on room entry; loading restarts that room. Both save-and-return-to-menu and save-and-quit preserve checkpoint semantics. Explicit abandonment awards no XP. No legacy manual-save files were present to remove.
+- Options on title and pause menus: master, ambience/music, combat and UI volume; default volume 50%; mute on focus loss. Add quiet dark ambience and subtle UI clicks, retaining the strongest feedback for combinations.
+- Visual options: windowed/borderless/fullscreen, resolution, UI/text scale, shake strength, flash/combo intensity, reduced motion and a separate fast-animation mode.
+
+Districts are Outer Blocks, Foundry Belt, Signal Ward, Civic Spire and Glass Ward. Factory gantries, mirrored signal platforms, civic terraces and glass-ward flanks have distinct generated layouts. Enemies can damage cover, but a shot never extends through cover it just destroyed. Environmental hazards affect entry (including deployment) and each enemy phase.
+
+The courier/relay chain enables later boss sabotage; broker investment leads to vendor discounts and a dividend, while theft strengthens later elites. Story state rolls back with the room entrance.
+
+XP is awarded only once per completed/lost run: `min(160, victories * 8 + completed districts * 18 + (victory ? 40 : 0))`. Cumulative thresholds are 0/60/140/240/360; Disruption, Chemical Warfare, Formations and Logistics add card/relic options. A run's unlock tier never changes after creation. Unlocks survive run deletion. Native and deterministic verification instructions are in the [README](../README.md#validate).
+
+## First expanded prototype (historical)
+
+The following records the earlier two-act build; current campaign, terrain, progression and autosave decisions above supersede it:
 
 - **Board-first UI:** compact phase/HP/funds bar, small enemy-intent badges, one hover/selection inspector, straight card row. Dossier cards use olive (troop), rust (action), steel blue (block), and faded purple (board), with separate category symbols. Card dealing, hover lift, play/discard travel and piece movement animate; reduced motion removes movement.
 - **Two acts plus central command:** Outer Blocks and Glass Ward each generate a seeded nine-room branching route on entry. Icons open encounter dialogs. Paths commit forward; branches are left behind. Events, fights and red zones vary by seed; a vendor and act boss are guaranteed.

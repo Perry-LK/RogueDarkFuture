@@ -4,6 +4,14 @@ A playable desktop tactical deckbuilding roguelike built in **Godot 4.7.2 .NET /
 
 Charcoal concrete, worn ivory typography, and layered 2.5D pieces. Dossier cards use muted **olive troops, rust actions, blue block, and purple board effects**. Successful player and enemy combinations bring the board to life with cyan/amber impacts and synthesized sound. No external art or audio downloads.
 
+### City campaign
+
+Act routes now scroll horizontally through variable-length angular streets. Branches reconnect only at encounters: routes neither cross nor share overlapping segments. Use the mouse wheel, drag the map, drag its scrollbar, or use Left/Right and Page Up/Down. Home/End focus the entry/boss; Tab automatically reveals off-screen rooms.
+
+Textured illustrated emblems replace the map's letter glyphs and the main HUD, card, supply and intent symbols. HUD icons expose descriptions on hover or keyboard focus; card rules and important phase actions retain text.
+
+Five districts now lead to Central Command. Secure four to unlock the finale, or tackle the fifth first. The approved route/icon preview is retained alongside raised battlefields, linked events, a simpler starter deck, permanent card-pack unlocks and room-entry autosaves.
+
 ## Play
 
 Requirements:
@@ -36,7 +44,7 @@ Alternatively, with `$Godot` set to the path of your Godot .NET executable:
 | **Right-click / Escape** | Cancel selection or close an overlay |
 | **Tab / Shift+Tab**, **Enter** | Focus and activate interface controls, cards, pieces and tiles |
 | **H**, **M**, **R** | Field guide, mute, reduced motion |
-| **F5** while playing / **Save Run** | Manually save this run to its own slot |
+| **Escape** with nothing selected | Pause; access options or save and exit |
 
 Hover or keyboard-focus a hand card to read its full rules in the right-hand inspector. Click a troop for movement and automatic attack previews. Hover/click an enemy to inspect its special role and observable plan. Recon adds numbers to intent badges and movement/target previews to the board. The top bar shows card play, board orders, cleanup, or enemy response; brief notices announce turns.
 
@@ -62,29 +70,37 @@ Different combos stack. Preparing one is deliberately quiet. Color, impact trail
 
 ## Campaign, economy and saves
 
-- **Two developed acts**, each a seeded, generated nine-room route with branches, events, vendors, elite red zones and a boss; then a distinct **central finale**.
-- A persistent, jagged street-map overview appears between acts. Districts fill with faded amber on liberation. The centre requires two-thirds of main districts: both in this two-act version.
-- **40 card definitions**, six troops and one balanced sixteen-card starting deck. Rewards and vendors support action/status/control, formation, movement and supply-specialist builds.
+- **Five districts**, each a seeded, generated nine-room route with branches, events, vendors, elite red zones and a specialist boss; then a short **central finale**.
+- The Outer Blocks, Foundry Belt, Signal Ward, Civic Spire and Glass Ward progress from abandoned streets to high-rise territory. Jagged districts fill with faded amber on liberation. Four completions unlock Central Command; the fifth is optional.
+- **40 card definitions** and six troop types, unlocked across future runs. The ten-card Resistance starter contains two Runners, three Signal Spikes, three Emergency Networks, one Recon Sweep and one Forced March.
 - Tactical enemy squads move with piece-specific rules and commit plans at round start. Spotter/sniper precision, shield formations, commander bonuses, controller/riot-unit containment and reinforcements have explicit setup and disruption rules. Later sections combine more specialists.
-- Irregular boards, deployment, chess-inspired movement, attack previews, independent block, temporary terrain effects, proximity intel and threat warnings.
+- Generated **7x6 to 9x8** battlefields: gantries, terraces and raised flanks, ramps, solid walls, destructible cover and persistent hazards. Normal pieces use ramps; Breachers leap one level. Ranged attacks gain +1 against lower units, never against organisation HP. Walls/cover stop troop fire, not proximity intel. Pushes/pulls cannot cross unconnected ledges.
 - Five draws per round, nine-card hand cap, three AP, retained hands, and explicit two-card cleanup.
 - Organisation HP persists; deployed and defeated troop cards return fresh next fight.
 - A shared **run wallet**. Vendors sell cards, supplies and relics; buy back supplies at half price; and remove cards for a rising fee while preserving an eight-card minimum.
 - **Twelve run-long relics** and **six supply types**. Carry three individual supplies; one free use per round during card play, with specialist exceptions.
-- Five event families: safehouses, salvage/risky fights, black-market deals, workshops and narrative tradeoffs. Bosses and elites award an unowned relic when available.
-- Built-in guide, card archives, combat log, keyboard controls, mute, reduced motion and optional threat haze. Accessibility settings persist locally.
+- Safehouses, salvage/risky fights, black-market deals and workshops join linked courier/relay/sabotage and broker/dividend/pursuit stories. Decisions affect later costs and enemies. Bosses and elites award an unlocked, unowned relic when available.
+- Built-in guide, card archives, combat log, keyboard controls and a persistent unlock collection.
 
 The organisation starts with **64 HP** and **65 funds**. Normal victories give 20 funds and 3 recovery; elites give 42 funds; bosses give 65 funds and 18 recovery, before relic modifiers. Every enemy attack still threatens organisation HP regardless of distance. Block pools remain independent.
 
-### Manual saving
+### Autosaves and unlocks
 
-Use **Save Run** or **F5** in-game. Each new run receives a unique identity and exactly one save file; saving again overwrites that run's slot. Multiple different runs can coexist without a fixed slot limit.
+Keep up to **three unfinished runs**. The game autosaves room entrances and route/city boundaries; there is no manual save command. **Continue** resumes the most recently played run; **Saved runs** lets you choose or explicitly abandon a slot. Pause offers **Save & main menu** and **Save & quit**. Closing the window also saves before exit.
 
-Loading restores the **entrance to the current room**, including its original HP, funds, deck, inventory, seed and generated content. Purchases, event choices and rewards inside the room are rolled back together, so loading cannot reroll stock or duplicate rewards. At a map/city boundary, saving retains that boundary. **Defeat deletes only the defeated run's slot.** There is no autosave.
+Loading restores the **entrance to the current room**, including original HP, funds, deck, inventory, narrative flags and seeded content. Purchases, event choices and rewards roll back together, preventing rerolls and duplicated rewards. Victory/defeat settles XP once and removes only that run's slot. Explicit abandonment awards no XP.
 
-Choose **Continue a saved run** on the title screen or **Menu -> Load Run**. Saves reside under Godot's `user://runs` directory (normally `%APPDATA%\Godot\app_userdata\FutureDark\runs` on Windows).
+Wins and losses earn `min(160, victories * 8 + completed districts * 18 + victory bonus of 40)` XP. Packs unlock at 60, 140, 240 and 360 cumulative XP: Disruption, Chemical Warfare, Formations and Logistics. Rewards, shops and relic pools use the tier captured when that run began. No permanent stat boosts; three to five substantial runs can open the collection, while short early losses earn less.
 
-This remains a playable prototype. Further acts, the security faction, cross-run power progression, mobile, production art and exported installers remain out of scope. Relics reset when starting a new run.
+Data lives under Godot's `user://`: `runs` contains version-2 checkpoints, `progress.json` the unlock profile, and `settings.cfg` options. On Windows this is normally `%APPDATA%\Godot\app_userdata\FutureDark`. Legacy version-1 manual saves are not supported. No legacy save files were present during this update.
+
+### Options
+
+Title and pause menus provide master, ambience/music, combat and UI volumes (all initially 50%), global mute and mute on focus loss. Quiet synthesized ambience and interface clicks sit beneath combo feedback.
+
+Choose windowed/borderless/fullscreen, resolution, UI fit, text scale, shake strength, combo intensity, reduced motion and independently accelerated 2x animations. These settings persist separately from runs. Zero combo intensity removes impact effects, not damage numbers.
+
+This remains a playable prototype. Multiplayer, the playable Security faction, mobile, production art and exported installers remain deferred. Relics and run stats reset on each new run.
 
 ## Validate
 
@@ -94,7 +110,7 @@ Package-free, deterministic C# rule tests:
 dotnet run --project .\Tests\FutureDark.Rules.Tests.csproj
 ```
 
-The 29 behavioral groups cover damage isolation, phase legality, conservation, overflow, committed movement, squad combinations, action builds, every card's normal/upgraded resolution, supply limits, vendor transactions, save identity/rollback and complete campaigns.
+The 34 behavioral groups cover damage isolation, phase legality, conservation, committed plans, squad combinations, every card's normal/upgraded resolution, transactions, room rollback, three save slots, XP idempotency, linked stories, cover, high ground, ramps, hazards and complete campaigns. Route geometry checks 640 seeded district maps; terrain connectivity checks 144 layouts. The deterministic policy completes one of six campaign seeds in the current baseline; this is a regression result, not a target human win rate.
 
 Native Godot input/render smoke test (requires a graphical session):
 
@@ -103,7 +119,9 @@ dotnet build .\FutureDark.csproj
 & $Godot --path . -- --smoke-test --smoke-screen=combo
 ```
 
-The smoke test injects Godot mouse/key events, validates a real combo, and exits. Optional `--screenshot=C:\absolute\path\capture.png` saves a viewport image. Other checks: `title`, `city`, `liberated`, `map`, `combat`, `guide`, `deck`, `dense`, `reduced`, `keyboard`, `enemyturn`, `vendor`, `event`, `act2`, `inventory`, `action`, `intel`, `saves`. Vendor/event/act-two/captured-city previews use deterministic fixtures; complete route behavior is tested by the console runner. The native `saves` case uses a temporary directory, checks manual save/load and automatic deletion on defeat, then removes its test files.
+The smoke test injects Godot mouse/key events, validates a real combo, and exits. Optional `--screenshot=C:\absolute\path\capture.png` saves a viewport image. Use the Windows GUI `.exe` directly for captured automation rather than its `_console.exe` wrapper.
+
+Other checks: `title`, `icons`, `city`, `liberated`, `map`, `mapscroll`, `combat`, `guide`, `deck`, `dense`, `reduced`, `keyboard`, `enemyturn`, `vendor`, `event`, `act2`, `inventory`, `action`, `intel`, `saves`, `terrain`, `options`, `pause-options`, `unlocks`, `end`. `mapscroll` checks actual scrolling and post-scroll hitboxes. `terrain` targets raised cover on a late-act board. `options` checks persistence, UI-fit cycling, audio gain and focus muting. `saves` checks autosave, Save & main menu, Continue rollback and deletion on defeat. Each smoke case isolates all persistence in its own temporary directory and removes it afterward. Specialist combo and late-campaign previews use explicit fixtures, not the player's basic starter.
 
 ## Source and design
 
